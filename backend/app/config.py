@@ -55,14 +55,15 @@ class Settings(BaseSettings):
         return (
             f"postgresql+psycopg2://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            "?sslmode=require"
         )
     
     @property
     def DATABASE_URL_ASYNC(self) -> str:
-        """Async database URL for async SQLAlchemy operations"""
         return (
             f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            "?ssl=require"
         )
 
 
