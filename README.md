@@ -1,152 +1,161 @@
-# Cognitive Memory Assistant
+# 🧠 AG-OS — Cognitive Memory Assistant
 
-An AI-powered backend system for a Cognitive Memory Assistant designed to help individuals with short-term memory loss. The system uses face recognition, audio transcription, and LLM-powered summarization to provide contextual memory assistance.
+An AI-powered assistant that helps individuals with short-term memory loss using **face recognition**, **audio transcription**, and **LLM-powered summarization**.
 
-## Overview
+---
 
-This FastAPI backend provides a complete REST API for managing users, caregivers, known persons, interactions, and memory retrieval. It integrates with OpenAI for LLM summarization, Whisper for speech-to-text, and Google APIs for calendar and task management.
+## ⚡ Quick Start (Windows — Easiest Way)
 
-## Features
+> **Requirements:** Python 3.11+, Node.js 18+, PostgreSQL (or a free [Neon](https://neon.tech) cloud DB)
 
-- **User & Caregiver Management**: Complete CRUD operations
-- **Face Recognition**: Identify persons using face encoding with cosine similarity
-- **Interaction Tracking**: Start/end interactions with automatic session management
-- **Audio Transcription**: Whisper STT integration for audio-to-text
-- **LLM Summarization**: Automatic conversation summarization using OpenAI GPT-4
-- **Memory Retrieval**: Fast database lookups for past interactions
-- **Emotion Tracking**: Record and analyze emotions during interactions
-- **Google Integration**: Sync notes to Google Tasks and events to Google Calendar
-- **Auto-generated API Docs**: Interactive Swagger UI and ReDoc
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- PostgreSQL database
-- OpenAI API key (for LLM features)
-
-### Installation
-
-1. **Clone the repository**
+### Step 1 — Clone the repo
 ```bash
 git clone https://github.com/Vishal17082k06/DBMS_proj_backend.git
 cd DBMS_proj_backend
 ```
 
-2. **Install dependencies**
+### Step 2 — Set up your environment file
 ```bash
-cd backend
-pip install -r requirements.txt
+copy .env.example .env
 ```
+Then open `.env` and fill in:
+- `DB_PASSWORD` — your PostgreSQL password (or use a free [Neon](https://neon.tech) DB)
+- `GROQ_API_KEY` — free key from [console.groq.com](https://console.groq.com) *(no credit card needed)*
 
-3. **Configure environment**
+### Step 3 — Run the setup script
 ```bash
-cp .env.example .env
-# Edit .env with your database credentials and API keys
+setup.bat
 ```
+This will:
+- Create a Python virtual environment (`venv/`)
+- Install all Python packages from `requirements.txt`
+- Install frontend npm packages
 
-4. **Run the server**
+### Step 4 — Start the app
 ```bash
-python run.py
+start.bat
+```
+Opens two terminal windows:
+- **Backend API** → http://localhost:8004
+- **Frontend UI** → http://localhost:5173
+
+Open **http://localhost:5173** in your browser and you're live! 🎉
+
+---
+
+## 🐳 Docker Quick Start (Cross-platform)
+
+> **Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+```bash
+# Copy env file and fill in your credentials
+copy .env.example .env
+
+# Start everything
+docker compose up --build
 ```
 
-The server will start at: **http://localhost:8000**
+- **Backend** → http://localhost:8004
+- **Frontend** → http://localhost:5173
 
-### Access API Documentation
+---
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **Health Check**: http://localhost:8000/health
+## 🔑 Credentials Guide
 
-## Environment Variables
+| What you need | Where to get it | Cost |
+|---|---|---|
+| **Groq API Key** | [console.groq.com](https://console.groq.com) | 🆓 Free |
+| **PostgreSQL DB** | [neon.tech](https://neon.tech) | 🆓 Free tier |
+| **OpenAI API Key** | [platform.openai.com](https://platform.openai.com) | 💳 Paid (optional) |
+| **Google Calendar** | [console.cloud.google.com](https://console.cloud.google.com) | 🆓 Free (optional) |
 
-Create a `.env` file in the `backend/` directory:
+> **Groq + Neon = 100% free setup** ✅
 
-```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=postgres
-DB_USER=postgres
-DB_PASSWORD=your_password
+---
 
-# OpenAI
-OPENAI_API_KEY=sk-your-key-here
-OPENAI_MODEL=gpt-4o
+## 🤖 Switching LLM Providers
 
-# Google OAuth (optional)
-GOOGLE_CLIENT_ID=your-client-id
-GOOGLE_CLIENT_SECRET=your-secret
+Use the **LLM PROVIDER** panel in the bottom-right corner of the UI to switch between:
 
-# App Configuration
-SESSION_DURATION_MINUTES=30
-FACE_SIMILARITY_THRESHOLD=0.60
-LLM_TIMEOUT_SECONDS=30
-```
+| Provider | Model | Speed | Cost |
+|---|---|---|---|
+| **Groq** *(default)* | llama-3.1-8b-instant | ⚡ Very fast | 🆓 Free |
+| **OpenAI** | gpt-4o-mini | 🐢 Moderate | 💳 Paid |
+| **Ollama** | llama3 (local) | 🔒 Private | 🆓 Free |
 
-## Project Structure
+The switch takes effect immediately — no restart needed.
+
+---
+
+## 🏗️ Project Structure
 
 ```
-backend/
+DBMS_proj_backend/
 ├── app/
-│   ├── api/routes/      # API endpoints
-│   ├── services/        # Business logic
-│   ├── models/          # SQLAlchemy ORM models
-│   ├── schemas/         # Pydantic request/response schemas
-│   ├── db/              # Database configuration
-│   └── core/            # Core utilities (scheduler, etc.)
-├── tests/               # Unit tests
-├── requirements.txt     # Python dependencies
-└── run.py              # Application entry point
+│   ├── services/
+│   │   ├── face_recognition/     ← Main FastAPI app (port 8004)
+│   │   ├── voice_app/            ← Audio transcription (Whisper)
+│   │   ├── reminder_app/         ← Google Calendar sync
+│   │   └── conversation_summarizer.py  ← LLM summarization
+│   ├── ai_models/
+│   │   └── interaction/          ← Face + LLM pipeline
+│   └── database/                 ← DB connection + queries
+├── frontend/                     ← React/Vite UI
+├── .env.example                  ← Environment template
+├── requirements.txt              ← Python dependencies
+├── setup.bat                     ← One-click setup (Windows)
+├── start.bat                     ← One-click start (Windows)
+└── docker-compose.yml            ← Docker setup (all platforms)
 ```
 
-## API Endpoints
+---
 
-### Core Endpoints
-- User Management: 7 endpoints
-- Caregiver Management: 7 endpoints
-- Person Management: 2 endpoints
-- Interaction Management: 2 endpoints
-- Emotion Records: 5 endpoints
-- Notes & Calendar: 2 endpoints
-- Audio Transcription: 2 endpoints
+## 🛠️ Tech Stack
 
-**Total**: 27 REST API endpoints
+| Layer | Technology |
+|---|---|
+| **Backend** | FastAPI, Python 3.11 |
+| **Database** | PostgreSQL (via psycopg2) |
+| **Face Recognition** | DeepFace, FaceNet, OpenCV, YOLOv8 |
+| **Speech-to-Text** | OpenAI Whisper / faster-whisper |
+| **LLM** | Groq (llama-3.1), OpenAI GPT-4o, Ollama |
+| **Frontend** | React + Vite |
+| **Scheduler** | APScheduler |
+| **Calendar** | Google Calendar API |
 
-See [API Contracts](./docs/API_CONTRACTS.md) for complete API documentation.
+---
 
-## Tech Stack
+## 📋 Manual Setup (if scripts don't work)
 
-- **Framework**: FastAPI
-- **Database**: PostgreSQL with SQLAlchemy ORM
-- **LLM**: OpenAI GPT-4o/3.5-turbo
-- **Speech-to-Text**: OpenAI Whisper
-- **Scheduler**: APScheduler
-- **External APIs**: Google Calendar, Google Tasks
-- **Validation**: Pydantic v2
-
-## Development
-
-### Run Tests
 ```bash
-cd backend
-pytest
+# Create virtual environment
+python -m venv venv
+
+# Activate it (Windows)
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start backend
+venv\Scripts\python -m uvicorn app.services.face_recognition.main:app --reload --port 8004
+
+# In a new terminal — start frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-### Code Formatting
-```bash
-black backend/app/
-ruff check backend/app/
-```
+---
 
-## Documentation
+## 📄 API Docs
 
-- [API Contracts](./docs/API_CONTRACTS.md) - Complete API reference
-- [Backend README](./docs/BACKEND_README.md) - Detailed backend documentation
-- [Quick Start Guide](./docs/QUICKSTART.md) - Getting started guide
-- [New Endpoints Guide](./docs/NEW_ENDPOINTS_GUIDE.md) - Quick reference for new endpoints
+Once the backend is running, visit:
+- **Swagger UI**: http://localhost:8004/docs
+- **ReDoc**: http://localhost:8004/redoc
+
+---
 
 ## License
 
-Proprietary - Cognitive Healthcare DBMS Project
+Proprietary — Cognitive Healthcare DBMS Project
