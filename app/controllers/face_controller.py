@@ -62,8 +62,8 @@ async def identify_person_from_frame(file: UploadFile) -> JSONResponse:
     """
     frame = _decode_upload(file)
 
-    # Step 1 — Person detection
-    person_detected, bbox = fs.detect_person(frame)
+    # Step 1 — Face detection
+    person_detected, bbox = fs.detect_face(frame)
     if not person_detected:
         return JSONResponse({
             "person_detected": False,
@@ -137,7 +137,7 @@ async def register_face_embedding(file: UploadFile, personid: int) -> JSONRespon
     """
     frame = _decode_upload(file)
 
-    person_detected, bbox = fs.detect_person(frame)
+    person_detected, bbox = fs.detect_face(frame)
     if not person_detected:
         raise HTTPException(status_code=422, detail="No person detected in the provided frame.")
 
@@ -170,6 +170,10 @@ async def register_face_embedding(file: UploadFile, personid: int) -> JSONRespon
     finally:
         cur.close()
         conn.close()
+
+    # Clear face cache to reload the newly registered face encoding
+    from app.services.face_recognition.face_service import clear_face_cache
+    clear_face_cache()
 
     return JSONResponse({
         "message": "Face registered successfully",

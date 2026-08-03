@@ -13,25 +13,62 @@ from app.database.db import save_conversation
 
 logger = logging.getLogger(__name__)
 
+# ── LLM client cache ──────────────────────────────────────────────────────────
 _openai_client = None
+_cached_provider = None
 
-def get_openai_client():
-    global _openai_client
-    if _openai_client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY is not set. Summarization will fallback.")
-            return None
-        _openai_client = OpenAI(api_key=api_key)
-    return _openai_client
+
+def get_llm_client() -> tuple[OpenAI, str]:
+    """Return a configured LLM client and provider name.
+    Supported providers: 'openai', 'groq', 'ollama'.
+    The client is recreated whenever LLM_PROVIDER changes at runtime.
+    """
+    global _openai_client, _cached_provider
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if _openai_client is None or provider != _cached_provider:
+        logger.info(f"[LLM] Building new client for provider: {provider}")
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY is not set in environment variables.")
+            _openai_client = OpenAI(api_key=api_key)
+        elif provider == "groq":
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                raise ValueError("GROQ_API_KEY is not set in environment variables.")
+            _openai_client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        elif provider == "ollama":
+            _openai_client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+        else:
+            raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+        _cached_provider = provider
+    return _openai_client, provider
+
+
+def reset_llm_client():
+    """Force the LLM client to be recreated on next call (call after provider switch)."""
+    global _openai_client, _cached_provider
+    _openai_client = None
+    _cached_provider = None
+
 
 def summarize_conversation_and_emotion(text: str) -> Tuple[str, str]:
     if not text or not text.strip() or len(text.strip()) < 2:
         return "No conversation detected.", "Neutral"
 
-    client = get_openai_client()
+    client, provider = get_llm_client()
     if not client:
-        return "Summary unavailable (missing OpenAI key).", "Neutral"
+        return "Summary unavailable (missing API key).", "Neutral"
+
+    # Choose model based on provider
+    if provider == "openai":
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    elif provider == "groq":
+        model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    elif provider == "ollama":
+        model = os.getenv("OLLAMA_MODEL", "llama3")
+    else:
+        model = "gpt-4o-mini"
 
     prompt = f"""
     Analyze the following conversation text:
@@ -46,20 +83,20 @@ def summarize_conversation_and_emotion(text: str) -> Tuple[str, str]:
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            temperature=0.3
+            temperature=0.3,
         )
         content = response.choices[0].message.content
         data = json.loads(content)
         summary = data.get("summary", "No summary.")
         emotion = data.get("emotion", "Neutral")
         return summary, emotion
-
     except Exception as e:
-        logger.error(f"OpenAI error during summarize/emotion: {e}")
+        logger.error(f"LLM error during summarize/emotion: {e}")
         return "Summary failed.", "Neutral"
+
 
 def check_face_fast(frame_bytes: bytes) -> bool:
     """
@@ -69,17 +106,18 @@ def check_face_fast(frame_bytes: bytes) -> bool:
     import cv2
     import numpy as np
     from app.services.face_recognition.face_service import get_face_cascade
-    
+
     np_arr = np.frombuffer(frame_bytes, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if frame is None:
         return False
-        
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     cascade = get_face_cascade()
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
-    
+
     return len(faces) > 0
+
 
 def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: bytes) -> Dict[str, Any]:
     """
@@ -105,14 +143,13 @@ def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: by
         return {"error": "Could not generate face embedding."}
 
     # 2. Audio Processing (Whisper)
-    temp_fd, temp_path = tempfile.mkstemp(suffix=".webm")  # Browsers often send webm for audio
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".webm")
     os.close(temp_fd)
-    
+
     transcribed_text = ""
     try:
         with open(temp_path, "wb") as f:
             f.write(audio_bytes)
-            
         transcribed_text = transcribe_audio(temp_path)
     finally:
         if os.path.exists(temp_path):
@@ -137,7 +174,7 @@ def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: by
     # Known Person
     details = fs.fetch_details(best_person_id)
     person_name = details["name"] if details else "Unknown"
-    
+
     interaction_id = save_conversation(
         userid=userid,
         personid=best_person_id,

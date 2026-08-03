@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 YOLO_MODEL_PATH = "yolov8n.pt"
 DEEPFACE_MODEL = "Facenet512"
-DEEPFACE_DETECTOR = "retinaface"
+DEEPFACE_DETECTOR = "skip"
 DEEPFACE_ENFORCE_DETECTION = False
 
-THRESHOLD_CONFIRMED = 0.70   # auto-confirm above this
-THRESHOLD_UNCERTAIN = 0.45   # treat as match above this too (was 0.55)
+THRESHOLD_CONFIRMED = 0.85   # Standard FaceNet512 cosine similarity threshold for confirmed match
+THRESHOLD_UNCERTAIN = 0.78   # Uncertain threshold for FaceNet512
 
 
 # --- State ---
@@ -50,14 +50,25 @@ def get_face_cascade():
         except:
             pass
 
-        # 2. Try project root fallback
+        # 2. Try project root fallback with temp file to bypass Windows Unicode path bug
         if _face_cascade is None or _face_cascade.empty():
+            import tempfile
             root_path = os.path.abspath(os.path.join(os.getcwd(), 'haarcascade_frontalface_default.xml'))
-            logger.warning(f"Built-in cascade empty, trying project root: {root_path}")
-            _face_cascade = cv2.CascadeClassifier(root_path)
+            if os.path.exists(root_path):
+                try:
+                    temp_path = os.path.join(tempfile.gettempdir(), 'haarcascade_frontalface_default.xml')
+                    with open(root_path, 'rb') as f_in:
+                        with open(temp_path, 'wb') as f_out:
+                            f_out.write(f_in.read())
+                    _face_cascade = cv2.CascadeClassifier(temp_path)
+                except Exception as e:
+                    logger.warning(f"Failed to copy Haar Cascade to temp path: {e}")
+                    _face_cascade = cv2.CascadeClassifier(root_path)
+            else:
+                _face_cascade = cv2.CascadeClassifier(root_path)
 
         # 3. Last resort check
-        if _face_cascade.empty():
+        if _face_cascade is None or _face_cascade.empty():
             logger.error("Failed to load Haar Cascade. Fallback detection disabled.")
     return _face_cascade
 
@@ -96,6 +107,55 @@ def detect_person(frame: np.ndarray) -> tuple[bool, Optional[tuple[int, int, int
 
     return False, None
 
+def detect_face(frame: np.ndarray) -> tuple[bool, Optional[tuple[int, int, int, int]]]:
+    """Detect the actual face bounding box in the frame.
+    1. First tries to detect a person using YOLO.
+    2. If a person is found, searches for a face inside the person's bounding box using Haar Cascade.
+    3. If no face is found inside the person's box, searches the entire frame using Haar Cascade.
+    4. If still no face is found, but a person was found, falls back to the top 25% of the person's body box.
+    5. If no person was found, runs Haar Cascade on the entire frame.
+    """
+    person_detected, person_box = detect_person(frame)
+    cascade = get_face_cascade()
+    
+    if person_detected and person_box:
+        x1, y1, x2, y2 = person_box
+        h, w = frame.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        
+        # 1. Search for face inside the person box
+        if cascade is not None and not cascade.empty() and x2 > x1 and y2 > y1:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            roi_gray = gray[y1:y2, x1:x2]
+            faces = cascade.detectMultiScale(roi_gray, 1.1, 5, minSize=(40, 40))
+            if len(faces) > 0:
+                faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                xf, yf, wf, hf = faces[0]
+                return True, (x1 + xf, y1 + yf, x1 + xf + wf, y1 + yf + hf)
+        
+        # 2. Fallback: estimate head region (top 25% of body box)
+        width = x2 - x1
+        height = y2 - y1
+        head_height = int(height * 0.25)
+        cx = (x1 + x2) // 2
+        face_x1 = max(0, cx - head_height // 2)
+        face_y1 = y1
+        face_x2 = min(w, cx + head_height // 2)
+        face_y2 = min(h, y1 + head_height)
+        return True, (face_x1, face_y1, face_x2, face_y2)
+
+    # 3. No person detected: run Haar Cascade on the entire frame
+    if cascade is not None and not cascade.empty():
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+        if len(faces) > 0:
+            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+            xf, yf, wf, hf = faces[0]
+            return True, (xf, yf, xf+wf, yf+hf)
+            
+    return False, None
+
 def crop_face(frame: np.ndarray, bbox: tuple[int, int, int, int], padding: int = 20) -> Optional[np.ndarray]:
     """Expand bbox and crop face, converting to RGB for DeepFace."""
     h, w = frame.shape[:2]
@@ -125,25 +185,51 @@ def generate_embedding(face_image: np.ndarray) -> Optional[List[float]]:
         logger.error(f"DeepFace error: {e}")
         return None
 
+_face_encodings_cache = None
+
+def clear_face_cache():
+    """Clear the cached face encodings to force a refresh on next compare."""
+    global _face_encodings_cache
+    _face_encodings_cache = None
+    logger.info("Face encodings cache cleared.")
+
 def compare_embedding(embedding: List[float]) -> tuple[Optional[int], float, str]:
     """Compare embedding against database and return (person_id, confidence, status)."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT personid, encodingdata FROM public.faceencoding")
-        rows = cur.fetchall()
-    finally:
-        cur.close()
-        conn.close()
+    global _face_encodings_cache
+    
+    if _face_encodings_cache is None:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT personid, encodingdata FROM public.faceencoding")
+                rows = cur.fetchall()
+            finally:
+                cur.close()
+                conn.close()
+            
+            cached = []
+            for pid, data in rows:
+                try:
+                    stored_vec = np.array(json.loads(data) if isinstance(data, str) else data, dtype=np.float32)
+                    cached.append((pid, stored_vec))
+                except Exception as e:
+                    logger.error(f"Error parsing encoding for person {pid}: {e}")
+            _face_encodings_cache = cached
+            logger.info(f"Loaded {len(_face_encodings_cache)} face encodings into cache.")
+        except Exception as db_err:
+            logger.error(f"Database error loading face encodings: {db_err}")
+            if _face_encodings_cache is None:
+                _face_encodings_cache = []
 
-    if not rows: return None, 0.0, "unknown"
+    if not _face_encodings_cache:
+        return None, 0.0, "unknown"
 
     query_vec = np.array(embedding, dtype=np.float32)
     best_pid, best_sim = None, -1.0
     skipped = 0
     
-    for pid, data in rows:
-        stored_vec = np.array(json.loads(data) if isinstance(data, str) else data, dtype=np.float32)
+    for pid, stored_vec in _face_encodings_cache:
         if stored_vec.shape != query_vec.shape:
             skipped += 1
             continue  # Skip dimension-mismatched rows gracefully
@@ -169,23 +255,44 @@ def fetch_details(person_id: int) -> Optional[dict]:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT name, relationshiptype FROM public.knownperson WHERE personid = %s", (person_id,))
+        cur.execute("SELECT name, relationshiptype, notes FROM public.knownperson WHERE personid = %s", (person_id,))
         p = cur.fetchone()
         if not p: return None
         
+        name, relationship, notes = p
+        
+        # Check if they were newly registered via camera
+        is_new_registration = notes == "Registered via live camera"
+        
         cur.execute("""
-            SELECT interactiondatetime, summarytext, emotiondetected 
+            SELECT interactiondatetime, summarytext, emotiondetected, conversation
             FROM public.conversation WHERE personid = %s 
+            AND summarytext NOT LIKE '[Face detected%%'
+            AND summarytext NOT LIKE 'Person recognized by face%%'
             ORDER BY interactiondatetime DESC LIMIT 1
         """, (person_id,))
         c = cur.fetchone()
         
+        # If no 'real' summary found, try to get the very last one anyway but maybe flag it
+        if not c:
+            cur.execute("""
+                SELECT interactiondatetime, summarytext, emotiondetected, conversation
+                FROM public.conversation WHERE personid = %s 
+                ORDER BY interactiondatetime DESC LIMIT 1
+            """, (person_id,))
+            c = cur.fetchone()
+            # If still has placeholder, mark as None for the UI to handle
+            if c and ("[Face detected" in c[1] or "Person recognized" in c[1]):
+                c = (c[0], None, c[2], c[3])
+
         return {
-            "name": p[0],
-            "relationship": p[1],
+            "name": name,
+            "relationship": relationship,
+            "is_new_register": is_new_registration,
             "last_date": c[0].strftime("%Y-%m-%d") if c and c[0] else None,
             "last_summary": c[1] if c else None,
-            "last_emotion": c[2] if c else None
+            "last_emotion": c[2] if c else None,
+            "last_conversation": c[3] if c and len(c) > 3 else None
         }
     finally:
         cur.close()

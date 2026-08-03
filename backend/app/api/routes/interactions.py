@@ -5,14 +5,14 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
-from app.schemas.interaction import (
+from ...db.session import get_db
+from ...schemas.interaction import (
     InteractionStartRequest,
     InteractionStartResponse,
     InteractionEndRequest,
     InteractionEndResponse,
 )
-from app.services.interaction_service import InteractionService
+from ...services.interaction_service import InteractionService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,13 +62,19 @@ async def end_interaction(
     try:
         interaction_service = InteractionService(db)
         
-        interaction_summary = await interaction_service.end_interaction(
+        # End interaction and get summary
+        await interaction_service.end_interaction(
             interaction_id=request.interaction_id,
         )
         
+        # Get the updated record
+        from ...models.conversation import Conversation
+        conversation = db.get(Conversation, request.interaction_id)
+        
         return InteractionEndResponse(
             interaction_id=request.interaction_id,
-            interaction_summary=interaction_summary,
+            interaction_summary=conversation.summarytext,
+            emotion_detected=conversation.emotiondetected,
         )
     
     except ValueError as e:

@@ -1,31 +1,38 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import CameraOverlay from './components/CameraOverlay';
-import NotificationBar from './components/NotificationBar';
 import './App.css';
 
-const REMINDERS_URL  = "http://localhost:8001/get-reminders";
-const REGISTER_URL   = "http://localhost:8004/register-new";
-const UNKNOWN_COOLDOWN_MS = 30 * 1000;   // 30s before unknown popup can re-trigger
-const KNOWN_COOLDOWN_MS   = 10 * 60 * 1000; // 10 min for known persons (in CameraOverlay)
+const REMINDERS_URL   = 'http://localhost:8004/get-reminders';
+const REGISTER_URL    = 'http://localhost:8004/register-new';
+const LIVE_LOG_URL    = 'http://localhost:8004/live-log';
+const SESSION_URL     = 'http://localhost:8004/session-status';
 
 function App() {
-  const [reminders, setReminders] = useState([{ id: 1, text: "Google Calendar: Ready" }]);
-  const [faceLogs,  setFaceLogs]  = useState([{ id: 101, text: "HUD Initialized — Scanning..." }]);
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [reminders, setReminders]   = useState([]);
+  const [eventLog, setEventLog]     = useState([{ ts: '--:--:--', message: 'HUD Initialized — Scanning...' }]);
+  const [sessionInfo, setSessionInfo] = useState(null);   // current session data
 
-  // Registration modal state
-  const [showModal,   setShowModal]   = useState(false);
-  const [regName,     setRegName]     = useState('');
+  const [sysStatus, setSysStatus] = useState({
+    state: 'idle',
+    person_name: null,
+    is_recording: false,
+    is_summarizing: false,
+    grace_countdown: 0,
+  });
+
+  const [llmProvider, setLlmProvider] = useState(
+    () => localStorage.getItem('llmProvider') || 'groq'
+  );
+
+  // Registration modal (shown AFTER session ends for unknown persons)
+  const [showModal, setShowModal]   = useState(false);
+  const [regName, setRegName]       = useState('');
   const [regRelation, setRegRelation] = useState('');
-  const [regStatus,   setRegStatus]   = useState('');
+  const [regStatus, setRegStatus]   = useState('');
+  const pendingFrameRef = useRef(null);   // last frame blob captured during session
 
-  // Cooldown refs
-  const lastUnknownRef = useRef(0);         // timestamp of last unknown popup
-  const pendingFrameRef = useRef(null);     // frame blob for registration
-  const registeredNamesRef = useRef(new Set()); // names registered this session
-
-  // ── Reminders & System Status polling ──────────────────────────────────
-  const [sysStatus, setSysStatus] = useState({ is_recording: false, is_summarizing: false });
-
+  // ── Polling ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     const fetchReminders = async () => {
       try {
@@ -36,98 +43,82 @@ function App() {
         }
       } catch (_) {}
     };
-    
-    const fetchSystemStatus = async () => {
+
+    const fetchLiveLog = async () => {
       try {
-        const res = await fetch("http://127.0.0.1:8004/system-status");
+        const res = await fetch(LIVE_LOG_URL);
         if (res.ok) {
           const data = await res.json();
-          setSysStatus({ is_recording: data.is_recording, is_summarizing: data.is_summarizing });
+          if (data.logs && data.logs.length > 0) {
+            setEventLog(data.logs.slice(-20).reverse());
+          }
+        }
+      } catch (_) {}
+    };
+
+    const fetchSession = async () => {
+      try {
+        const res = await fetch(SESSION_URL);
+        if (res.ok) {
+          const data = await res.json();
+          setSysStatus(data);
+
+          // If session just ended and needs registration, trigger modal
+          if (data.state === 'idle' && data.needs_registration && !showModal) {
+            setShowModal(true);
+            setRegName('');
+            setRegRelation('');
+            setRegStatus('');
+          }
         }
       } catch (_) {}
     };
 
     fetchReminders();
-    fetchSystemStatus();
+    fetchLiveLog();
+    fetchSession();
 
-    const idReminders = setInterval(fetchReminders, 30000);
-    const idStatus = setInterval(fetchSystemStatus, 5000); // Check status every 5 seconds instead of 1.5s
-
-    return () => {
-      clearInterval(idReminders);
-      clearInterval(idStatus);
-    };
-  }, []);
-
-  // ── Face detection callback ────────────────────────────
-  const addFaceLog = useCallback((result) => {
-    const now = Date.now();
-
-    if (result.type === 'unknown') {
-      // Don't re-trigger if modal is already open
-      if (showModal) return;
-      // Don't re-trigger within cooldown
-      if (now - lastUnknownRef.current < UNKNOWN_COOLDOWN_MS) return;
-
-      lastUnknownRef.current = now;
-      pendingFrameRef.current = result.frameBlob;
-      setShowModal(true);
-      setRegName('');
-      setRegRelation('');
-      setRegStatus('');
-      return;
-    }
-
-    // Known person — build log message
-    const name = result.name || 'Unknown';
-    const pct  = result.confidence ? `${(result.confidence * 100).toFixed(1)}%` : '';
-    let message = `✅ ${name} (${result.relationship || '?'}) — ${pct}`;
-    if (result.lastVisit)   message += ` | Last: ${result.lastVisit}`;
-    if (result.lastEmotion) message += ` | ${result.lastEmotion}`;
-
-    setFaceLogs(prev => {
-      // Remove any existing log for this specific person to keep the list unique
-      const filtered = prev.filter(log => !log.text.includes(`✅ ${name}`));
-      return [{ id: Date.now(), text: message }, ...filtered].slice(0, 6);
-    });
+    const rid  = setInterval(fetchReminders, 30000);
+    const lid  = setInterval(fetchLiveLog, 800);
+    const sid  = setInterval(fetchSession, 400);
+    return () => { clearInterval(rid); clearInterval(lid); clearInterval(sid); };
   }, [showModal]);
 
-  // ── Registration submit ────────────────────────────────
+  // ── Session event callback from CameraOverlay ────────────────────────────
+  const handleSessionEvent = useCallback((event) => {
+    if (event.type === 'known_session') {
+      setSessionInfo(event);
+    } else if (event.type === 'unknown_session') {
+      setSessionInfo({ name: 'Unknown', relationship: '?', confidence: event.confidence });
+    } else if (event.type === 'session_ended') {
+      setSessionInfo(null);
+      if (event.needsRegistration) {
+        setShowModal(true);
+        setRegName('');
+        setRegRelation('');
+        setRegStatus('');
+      }
+    }
+  }, []);
+
+  // ── Registration submit ──────────────────────────────────────────────────
   const handleRegister = async () => {
     if (!regName.trim() || !regRelation.trim()) {
       setRegStatus('⚠️ Please fill both fields.');
-      return;
-    }
-    if (!pendingFrameRef.current) {
-      setRegStatus('⚠️ No face image captured. Try again.');
       return;
     }
 
     setRegStatus('⏳ Registering...');
     try {
       const formData = new FormData();
-      formData.append('file', pendingFrameRef.current, 'frame.jpg');
       formData.append('name', regName.trim());
       formData.append('relationship', regRelation.trim());
 
-      const res = await fetch(REGISTER_URL, { method: 'POST', body: formData });
+      const res  = await fetch(REGISTER_URL, { method: 'POST', body: formData });
       const data = await res.json();
 
       if (res.ok) {
-        const registeredName = regName.trim();
         setRegStatus(`✅ ${data.message}`);
-
-        // Track registered person so they're not triggered again immediately
-        registeredNamesRef.current.add(registeredName.toLowerCase());
-
-        // Suppress unknown popup for 10min (this person just registered)
-        lastUnknownRef.current = Date.now() + KNOWN_COOLDOWN_MS;
-
-        setFaceLogs(prev => [
-          { id: Date.now(), text: `🆕 Registered: ${registeredName} (${regRelation})` },
-          ...prev
-        ].slice(0, 6));
-
         setTimeout(() => setShowModal(false), 1500);
       } else {
         setRegStatus(`❌ ${data.detail || 'Registration failed.'}`);
@@ -137,45 +128,131 @@ function App() {
     }
   };
 
+  // ── Derived UI values ────────────────────────────────────────────────────
+  const stateLabel = () => {
+    if (sysStatus.is_recording)   return { text: '🎤 LISTENING', color: '#ff4444' };
+    if (sysStatus.is_summarizing) return { text: '⚙️ PROCESSING', color: '#f0c040' };
+    if (sysStatus.state === 'grace_period') return { text: `⚠️ LOST FACE — ${sysStatus.grace_countdown}s`, color: '#ff9800' };
+    if (sysStatus.state === 'session_active') return { text: `🔗 SESSION — ${sysStatus.person_name || '?'}`, color: '#4caf50' };
+    return { text: '🟢 SCANNING', color: '#00e5ff' };
+  };
+
+  const { text: stateText, color: stateColor } = stateLabel();
+
   return (
     <div className="ar-hud-container">
-      <CameraOverlay onFaceDetected={addFaceLog} />
+      <CameraOverlay onSessionEvent={handleSessionEvent} sysStatus={sysStatus} />
 
+      {/* ── LEFT PANEL — Event Log ── */}
       <div className="floating-hud left-hud">
-        <NotificationBar title="EYE-TRACK" items={faceLogs} />
+        <div className="hud-title">SYSTEM LOG</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto' }}>
+          {eventLog.map((entry, i) => (
+            <div key={i} style={{ fontSize: 11, color: i === 0 ? '#e6edf3' : '#6e7681', fontFamily: 'monospace', lineHeight: 1.4 }}>
+              <span style={{ color: '#3fb950', marginRight: 6 }}>{entry.ts}</span>
+              {entry.message}
+            </div>
+          ))}
+        </div>
       </div>
 
+      {/* ── RIGHT PANEL — Session Info + Reminders ── */}
       <div className="floating-hud right-hud">
-        <NotificationBar title="REMINDERS" items={reminders} />
+        <div className="hud-title">SESSION</div>
+        {sessionInfo ? (
+          <div style={{ marginBottom: 12, fontSize: 12, lineHeight: 1.6 }}>
+            <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 14 }}>✅ {sessionInfo.name}</div>
+            {sessionInfo.relationship && <div style={{ color: '#8b949e' }}>Relationship: {sessionInfo.relationship}</div>}
+            {sessionInfo.confidence   && <div style={{ color: '#8b949e' }}>Confidence: {(sessionInfo.confidence * 100).toFixed(1)}%</div>}
+            {sessionInfo.lastVisit    && <div style={{ color: '#8b949e' }}>Last visit: {sessionInfo.lastVisit}</div>}
+            {sessionInfo.lastSummary  && (
+              <div style={{ color: '#8b949e', marginTop: 4 }}>
+                💬 {sessionInfo.lastSummary.substring(0, 80)}{sessionInfo.lastSummary.length > 80 ? '...' : ''}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ color: '#3b434d', fontSize: 12, marginBottom: 12 }}>No active session</div>
+        )}
+
+        <div className="hud-title" style={{ marginTop: 8 }}>REMINDERS</div>
+        {reminders.length === 0
+          ? <div style={{ color: '#3b434d', fontSize: 12 }}>No upcoming reminders</div>
+          : reminders.slice(0, 4).map(r => (
+            <div key={r.id} style={{ fontSize: 11, color: '#8b949e', marginTop: 4 }}>📅 {r.text}</div>
+          ))
+        }
       </div>
 
-      <div className="system-footer" style={{ display: 'flex', gap: '15px' }}>
-        <span>SYSTEM: STABLE | AG-OS v1.0</span>
-        {sysStatus.is_recording && (
-          <span style={{ color: '#ff4444', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
-            🎙️ REC ● LIVE
-          </span>
-        )}
-        {sysStatus.is_summarizing && (
-          <span style={{ color: '#f0c040', fontWeight: 'bold', animation: 'pulse 1.5s infinite' }}>
-            ⚙️ SUMMARIZING...
-          </span>
+      {/* ── FOOTER ── */}
+      <div className="system-footer">
+        <span>AG-OS v2.0</span>
+        <span style={{ color: stateColor, fontWeight: 600, transition: 'color 0.3s' }}>
+          {stateText}
+        </span>
+        {sysStatus.state === 'session_active' && sysStatus.session_duration > 0 && (
+          <span style={{ color: '#8b949e' }}>Session: {sysStatus.session_duration}s</span>
         )}
       </div>
+{/* ── LLM PROVIDER SWITCHER ── */}
+<div style={{
+  position: 'absolute', bottom: 20, right: 20,
+  background: 'rgba(10,15,25,0.85)',
+  backdropFilter: 'blur(10px)',
+  border: '1px solid rgba(0,229,255,0.2)',
+  borderRadius: 10, padding: '10px 14px',
+  color: '#e6edf3', fontFamily: 'monospace',
+  display: 'flex', flexDirection: 'column', gap: 6, minWidth: 180,
+  boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+}}>
+  <div style={{ fontSize: 10, color: '#00e5ff', letterSpacing: 2, marginBottom: 2 }}>LLM PROVIDER</div>
+  {['openai', 'groq', 'ollama'].map(p => (
+    <button
+      key={p}
+      onClick={async () => {
+        try {
+          const res = await fetch('http://localhost:8004/config/provider', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: p })
+          });
+          if (res.ok) {
+            setLlmProvider(p);
+            localStorage.setItem('llmProvider', p);
+          }
+        } catch (_) {}
+      }}
+      style={{
+        background: llmProvider === p ? 'rgba(0,229,255,0.15)' : 'transparent',
+        border: llmProvider === p ? '1px solid #00e5ff' : '1px solid rgba(255,255,255,0.1)',
+        borderRadius: 6, padding: '5px 10px',
+        color: llmProvider === p ? '#00e5ff' : '#6e7681',
+        fontFamily: 'monospace', fontSize: 12, cursor: 'pointer',
+        textAlign: 'left', textTransform: 'uppercase', letterSpacing: 1,
+        transition: 'all 0.2s',
+      }}
+    >
+      {llmProvider === p ? '▶ ' : '  '}{p}
+    </button>
+  ))}
+</div>
 
-      {/* REGISTRATION MODAL */}
+      {/* ── REGISTRATION MODAL (shown AFTER session ends) ── */}
       {showModal && (
         <div style={styles.overlay}>
           <div style={styles.modal}>
-            <h2 style={styles.title}>🆕 Unknown Person Detected</h2>
-            <p style={styles.sub}>Register this person to remember them in future.</p>
-
+            <h2 style={styles.title}>🆕 Register New Person</h2>
+            <p style={styles.sub}>
+              The session with this unrecognized person has ended.<br />
+              Enter their details to remember them next time.
+            </p>
             <input
               style={styles.input}
               placeholder="Full Name"
               value={regName}
               onChange={e => setRegName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleRegister()}
+              autoFocus
             />
             <input
               style={styles.input}
@@ -184,16 +261,10 @@ function App() {
               onChange={e => setRegRelation(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleRegister()}
             />
-
             {regStatus && <p style={styles.status}>{regStatus}</p>}
-
             <div style={styles.btnRow}>
               <button style={styles.btnPrimary} onClick={handleRegister}>Register</button>
-              <button style={styles.btnSecondary} onClick={() => {
-                // Set cooldown so popup doesn't immediately re-open
-                lastUnknownRef.current = Date.now() + UNKNOWN_COOLDOWN_MS * 2;
-                setShowModal(false);
-              }}>Skip (1 min)</button>
+              <button style={styles.btnSecondary} onClick={() => setShowModal(false)}>Skip</button>
             </div>
           </div>
         </div>
@@ -205,28 +276,28 @@ function App() {
 const styles = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.75)',
+    background: 'rgba(0,0,0,0.8)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 9999,
-    backdropFilter: 'blur(4px)',
+    backdropFilter: 'blur(6px)',
   },
   modal: {
     background: '#0d1117',
     border: '1px solid #30363d',
     borderRadius: 12,
     padding: '32px 28px',
-    width: 360,
+    width: 380,
     display: 'flex', flexDirection: 'column', gap: 14,
     boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
   },
-  title:  { margin: 0, color: '#e6edf3', fontSize: 20, fontWeight: 700 },
-  sub:    { margin: 0, color: '#8b949e', fontSize: 14 },
-  input:  {
+  title: { margin: 0, color: '#e6edf3', fontSize: 20, fontWeight: 700 },
+  sub: { margin: 0, color: '#8b949e', fontSize: 13, lineHeight: 1.5 },
+  input: {
     background: '#161b22', border: '1px solid #30363d',
     borderRadius: 8, padding: '10px 14px',
     color: '#e6edf3', fontSize: 14, outline: 'none',
   },
-  status: { margin: 0, color: '#f0c040', fontSize: 13, minHeight: 18 },
+  status: { margin: 0, color: '#f0c040', fontSize: 13 },
   btnRow: { display: 'flex', gap: 10, marginTop: 4 },
   btnPrimary: {
     flex: 1, padding: '10px 0', borderRadius: 8, cursor: 'pointer',

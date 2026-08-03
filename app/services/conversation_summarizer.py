@@ -11,15 +11,40 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _openai_client = None
+_cached_provider = None
 
-def get_openai_client() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is not set in environment variables.")
-        _openai_client = OpenAI(api_key=api_key)
-    return _openai_client
+def get_llm_client() -> tuple[OpenAI, str]:
+    """Return a configured LLM client and the provider name.
+    Supported providers: 'openai', 'groq', 'ollama'.
+    Recreates the client whenever LLM_PROVIDER changes at runtime.
+    """
+    global _openai_client, _cached_provider
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if _openai_client is None or provider != _cached_provider:
+        logger.info(f"[LLM] Building new summarizer client for provider: {provider}")
+        if provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY is not set in environment variables.")
+            _openai_client = OpenAI(api_key=api_key)
+        elif provider == "groq":
+            api_key = os.getenv("GROQ_API_KEY")
+            if not api_key:
+                raise ValueError("GROQ_API_KEY is not set in environment variables.")
+            _openai_client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+        elif provider == "ollama":
+            _openai_client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+        else:
+            raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+        _cached_provider = provider
+    return _openai_client, provider
+
+
+def reset_llm_client():
+    """Force the client to be recreated on next call (used after provider switch)."""
+    global _openai_client, _cached_provider
+    _openai_client = None
+    _cached_provider = None
 
 def analyze_conversation(transcript: str, current_time: datetime = None) -> Dict[str, Any]:
     """
@@ -43,10 +68,11 @@ def analyze_conversation(transcript: str, current_time: datetime = None) -> Dict
     Please read the following conversation:
     "{transcript}"
 
-    Output EXACTLY a JSON object with two keys: "summary" and "events".
+    Output EXACTLY a JSON object with three keys: "summary", "emotion", and "events".
     
     1. "summary": Provide a 3 to 5 line summary of the conversation. 
-    2. "events": A list of important events/appointments discussed. If there are none, return an empty list [].
+    2. "emotion": A one or two-word string representing the overall emotional tone (e.g. Happy, Anxious, Neutral).
+    3. "events": A list of important events/appointments discussed. If there are none, return an empty list [].
     
     For each event in the "events" array, it MUST follow exactly this format (use 24-hour time):
     {{
@@ -58,11 +84,21 @@ def analyze_conversation(transcript: str, current_time: datetime = None) -> Dict
     Only return valid JSON. Do not return markdown blocks like ```json
     """
 
-    client = get_openai_client()
+    client, provider = get_llm_client()
+
+    # Choose model based on provider
+    if provider == "openai":
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    elif provider == "groq":
+        model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    elif provider == "ollama":
+        model = os.getenv("OLLAMA_MODEL", "llama3")
+    else:
+        model = "gpt-4o-mini"
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
             temperature=0.2, # Low temp for structured extraction
@@ -71,11 +107,10 @@ def analyze_conversation(transcript: str, current_time: datetime = None) -> Dict
         content = response.choices[0].message.content
         data = json.loads(content)
         
-        # Guarantee missing keys gracefully
-        if "summary" not in data:
-            data["summary"] = "No summary generated."
-        if "events" not in data:
-            data["events"] = []
+        # Ensure expected keys exist
+        data.setdefault("summary", "No summary generated.")
+        data.setdefault("emotion", "Neutral")
+        data.setdefault("events", [])
             
         return data
 

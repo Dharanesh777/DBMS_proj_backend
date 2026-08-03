@@ -6,12 +6,12 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 from sqlalchemy.orm import Session
 
-from app.models.conversation import Conversation
-from app.models.user import User
-from app.models.person import KnownPerson
-from app.core.scheduler import get_scheduler
-from app.services.llm_service import LLMService
-from app.config import get_settings
+from ..models.conversation import Conversation
+from ..models.user import User
+from ..models.person import KnownPerson
+from ..core.scheduler import get_scheduler
+from .llm_service import LLMService
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +152,12 @@ class SessionManager:
         
         # Generate session summary
         try:
-            summary = await self.llm_service.summarize_session(
+            result = await self.llm_service.summarize_session(
                 transcript=conversation.conversation,
                 user_context=user_context,
                 person_relationship=person_relationship,
             )
+            summary = result.get("summary", "[Session summary empty]")
             session_state.session_summaries.append(summary)
             logger.info(f"Generated session {session_state.session_number} summary for interaction {interaction_id}")
         except Exception as e:

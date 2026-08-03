@@ -126,12 +126,12 @@ class InteractionService:
             person_relationship = person.relationshiptype if person else None
             
             try:
-                final_session_summary = await self.llm_service.summarize_session(
+                result = await self.llm_service.summarize_session(
                     transcript=conversation.conversation,
                     user_context=user_context,
                     person_relationship=person_relationship,
                 )
-                session_state.session_summaries.append(final_session_summary)
+                session_state.session_summaries.append(result.get("summary", ""))
             except Exception as e:
                 logger.error(f"Failed to generate final session summary: {e}")
                 session_state.session_summaries.append("[Final session summary generation failed]")
@@ -139,17 +139,20 @@ class InteractionService:
         # Merge all session summaries
         all_summaries = session_state.session_summaries
         
-        if not all_summaries:
-            interaction_summary = "[No conversation recorded]"
-        else:
+        interaction_summary = "[No conversation recorded]"
+        detected_emotion = "Neutral"
+        
+        if all_summaries:
             try:
                 user = self.db.get(User, session_state.user_id)
                 user_context = user.medicalcondition if user else None
                 
-                interaction_summary = await self.llm_service.merge_session_summaries(
+                result = await self.llm_service.merge_session_summaries(
                     session_summaries=all_summaries,
                     user_context=user_context,
                 )
+                interaction_summary = result.get("summary", interaction_summary)
+                detected_emotion = result.get("emotion", detected_emotion)
             except Exception as e:
                 logger.error(f"Failed to merge session summaries: {e}")
                 # Fallback: concatenate summaries
@@ -159,10 +162,11 @@ class InteractionService:
         
         # Store in DB
         conversation.summarytext = interaction_summary
+        conversation.emotiondetected = detected_emotion
         self.db.commit()
         
         # Clear session state
         self.session_manager.clear_session_state(interaction_id)
         
-        logger.info(f"Ended interaction {interaction_id}, summary stored")
+        logger.info(f"Ended interaction {interaction_id}, summary and emotion stored")
         return interaction_summary

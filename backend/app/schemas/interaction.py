@@ -26,4 +26,5 @@ class InteractionEndResponse(BaseModel):
     """POST /api/interactions/end — response payload"""
     interaction_id: int
     interaction_summary: str
+    emotion_detected: str | None = None
     message: str = "Interaction ended successfully"

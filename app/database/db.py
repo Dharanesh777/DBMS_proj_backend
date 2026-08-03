@@ -1,20 +1,30 @@
 import os
+import time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_db_connection():
-    conn = psycopg2.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", "5432"),
-        dbname=os.getenv("DB_NAME", "postgres"),
-        user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD", ""),
-        sslmode=os.getenv("DB_SSLMODE", "prefer"),
-    )
-    return conn
+def get_db_connection(retries=3, delay=1.0):
+    for i in range(retries):
+        try:
+            conn = psycopg2.connect(
+                host=os.getenv("DB_HOST", "localhost"),
+                port=os.getenv("DB_PORT", "5432"),
+                dbname=os.getenv("DB_NAME", "postgres"),
+                user=os.getenv("DB_USER", "postgres"),
+                password=os.getenv("DB_PASSWORD", ""),
+                sslmode=os.getenv("DB_SSLMODE", "prefer"),
+            )
+            return conn
+        except psycopg2.OperationalError as e:
+            if i < retries - 1:
+                print(f"⚠️ DB Connection failed: {e}. Retrying in {delay}s... (attempt {i+1}/{retries})", flush=True)
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise e
 
 import json
 
@@ -41,16 +51,16 @@ def save_conversation(userid, personid, transcribed_text, summarized_text, detec
         cur.close()
         conn.close()
 
-def update_conversation_results(interactionid, transcribed_text, summarized_text):
+def update_conversation_results(interactionid, transcribed_text, summarized_text, emotion_detected='Neutral'):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         query = """
             UPDATE public.conversation 
-            SET conversation = %s, summarytext = %s
+            SET conversation = %s, summarytext = %s, emotiondetected = %s
             WHERE interactionid = %s;
         """
-        cur.execute(query, (transcribed_text, summarized_text, interactionid))
+        cur.execute(query, (transcribed_text, summarized_text, emotion_detected, interactionid))
         conn.commit()
     except Exception as e:
         conn.rollback()

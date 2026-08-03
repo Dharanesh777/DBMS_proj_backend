@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_settings
-from app.core.scheduler import start_scheduler, shutdown_scheduler, get_scheduler
-from app.services.session_service import SessionManager
+from .config import get_settings
+from .core.scheduler import start_scheduler, shutdown_scheduler, get_scheduler
+from .services.session_service import SessionManager
 
 # Configure logging
 logging.basicConfig(
@@ -76,7 +76,7 @@ app.add_middleware(
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Health check endpoint for monitoring"""
-    from app.db.base import get_engine
+    from .db.base import get_engine
     from sqlalchemy import text
     
     try:
@@ -90,7 +90,7 @@ async def health_check():
 
 
 # ── Import and include routers ────────────────────────────────────────────────
-from app.api.routes import (
+from .api.routes import (
     users,
     caregivers,
     persons,
