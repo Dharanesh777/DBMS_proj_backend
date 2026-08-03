@@ -3,7 +3,7 @@ uvicorn[standard]
 python-multipart
 openai-whisper
 psycopg2-binary
-python-dotenv
+python-dotenv>=1.0.0
 SpeechRecognition
 pyaudio
 google-auth
