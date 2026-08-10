@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 
 # (Local imports are used within functions for db.py)
-from app.ai_models.transcription.whisper_service import transcribe_audio_file
+from app.services.voice_app.transcription_service import transcribe_audio as transcribe_audio_file
 
 # ---------------------------------------------------------------------------
 # VAD constants — tune these if needed
@@ -113,6 +113,8 @@ async def process_audio_upload(
             f.write(contents)
 
         text = transcribe_audio_file(temp_path)
+        if text is None:
+            raise HTTPException(status_code=500, detail="Transcription failed.")
         interaction_id = save_conversation(userid, personid, text, None, None)
 
         return JSONResponse({
@@ -121,6 +123,8 @@ async def process_audio_upload(
             "interactionid": interaction_id,
         })
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -151,6 +155,8 @@ def record_audio_from_mic(userid: int = 1, personid: Optional[int] = None):
 
         wav_write(temp_path, SAMPLE_RATE, audio_data)
         text = transcribe_audio_file(temp_path)
+        if text is None:
+            raise HTTPException(status_code=500, detail="Transcription failed.")
         interaction_id = save_conversation(userid, personid, text, None, None)
 
         return JSONResponse({

@@ -25,8 +25,8 @@ DEEPFACE_MODEL = "Facenet512"
 DEEPFACE_DETECTOR = "skip"
 DEEPFACE_ENFORCE_DETECTION = False
 
-THRESHOLD_CONFIRMED = 0.85   # Standard FaceNet512 cosine similarity threshold for confirmed match
-THRESHOLD_UNCERTAIN = 0.78   # Uncertain threshold for FaceNet512
+THRESHOLD_CONFIRMED = 0.70   # DeepFace's own pre-tuned Facenet512/cosine match threshold (1 - 0.30 distance)
+THRESHOLD_UNCERTAIN = 0.60   # Below confirmed but worth asking the user to confirm
 
 
 # --- State ---
@@ -174,8 +174,11 @@ def crop_face(frame: np.ndarray, bbox: tuple[int, int, int, int], padding: int =
 def generate_embedding(face_image: np.ndarray) -> Optional[List[float]]:
     """Generate 512-d embedding using DeepFace."""
     try:
+        # crop_face() returns RGB, but DeepFace's numpy-array input contract is BGR
+        # (see deepface.commons.image_utils.load_image) — convert back before calling it.
+        bgr_image = cv2.cvtColor(face_image, cv2.COLOR_RGB2BGR)
         result = DeepFace.represent(
-            img_path=face_image,
+            img_path=bgr_image,
             model_name=DEEPFACE_MODEL,
             detector_backend=DEEPFACE_DETECTOR,
             enforce_detection=DEEPFACE_ENFORCE_DETECTION
