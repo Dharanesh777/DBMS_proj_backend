@@ -32,6 +32,9 @@ requests
 SQLAlchemy
 pydantic-settings
 apscheduler
+scikit-learn
+celery
+redis
 
 # --- Testing ---
 pytest

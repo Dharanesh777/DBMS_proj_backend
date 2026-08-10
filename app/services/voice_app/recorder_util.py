@@ -1,6 +1,7 @@
 import os
 import queue
 import threading
+import time
 import sounddevice as sd
 import soundfile as sf
 import requests
@@ -18,7 +19,7 @@ class BackgroundRecorder:
             print(f"[MIC STATUS] {status}", flush=True)
         self.q.put(indata.copy())
 
-    def start(self, filename="session_recording.wav", samplerate=16000):
+    def start(self, filename="session_recording.wav", samplerate=None):
         if self.recording:
             return
         self.filename = filename
@@ -27,9 +28,28 @@ class BackgroundRecorder:
         self.thread = threading.Thread(target=self._record_loop, args=(samplerate,), daemon=True)
         self.thread.start()
 
+    def _open_input_stream(self, samplerate, attempts=3, retry_delay=0.5):
+        """Open the mic, retrying briefly — macOS CoreAudio can still be tearing
+        down the previous session's stream when a new one starts right away,
+        which surfaces as a transient PortAudio -9986 error."""
+        last_err = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return sd.InputStream(samplerate=samplerate, channels=1, callback=self.callback)
+            except Exception as e:
+                last_err = e
+                if attempt < attempts:
+                    print(f"[MIC] Retry {attempt}/{attempts} opening input stream after error: {e}", flush=True)
+                    time.sleep(retry_delay)
+        raise last_err
+
     def _record_loop(self, samplerate):
         try:
-            with sd.InputStream(samplerate=samplerate, channels=1, callback=self.callback):
+            # Whisper resamples internally regardless of input rate, so use the
+            # device's native rate instead of forcing one CoreAudio may reject.
+            if samplerate is None:
+                samplerate = int(sd.query_devices(kind="input")["default_samplerate"])
+            with self._open_input_stream(samplerate) as stream:
                 with sf.SoundFile(self.filename, mode='w', samplerate=samplerate, channels=1) as f:
                     while self.recording:
                         try:
