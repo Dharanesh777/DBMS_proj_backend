@@ -1,23 +1,31 @@
 """
-services/calendar_service.py — Calendar event creation and Google Calendar sync
+services/calendar_service.py — Calendar event creation
+
+Previously also synced events to Google Calendar via a per-user DB-stored OAuth
+token (users.google_token_json). That was a second, redundant Google OAuth
+mechanism alongside app/services/reminder_app/google_auth.py's file-based
+token.json — the only one actually exercised by the live app (the frontend's
+reminders panel and the post-session reminder pipeline both go through it).
+The DB-token path was never wired to anything the frontend calls, so it and
+its sync call were removed; this now does pure DB storage.
 """
 import logging
 from datetime import datetime
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.calendar_event import CalendarEvent
 from app.models.user import User
-from app.services.google_calendar import GoogleCalendarService
+from app.models.junction_tables import userknownperson
 
 logger = logging.getLogger(__name__)
 
 
 class CalendarService:
-    """Service for creating calendar events and syncing to Google Calendar"""
+    """Service for creating calendar events"""
 
     def __init__(self, db: Session):
         self.db = db
-        self.google_calendar = GoogleCalendarService()
 
     def create_event(
         self,
@@ -26,21 +34,39 @@ class CalendarService:
         event_datetime: datetime,
         related_person_id: int | None = None,
         reminder_time: datetime | None = None,
-    ) -> tuple[int, str | None]:
+    ) -> int:
         """
-        Create a calendar event and sync to Google Calendar.
-        
+        Create a calendar event.
+
         Args:
             user_id: User ID
             event_title: Event title
             event_datetime: Event date/time
             related_person_id: Optional related person ID
             reminder_time: Optional reminder time
-        
+
         Returns:
-            (event_id, sync_warning)
+            event_id
+
+        Raises:
+            ValueError: If user_id doesn't exist, or related_person_id isn't linked to user_id
         """
-        # Create event in DB
+        user = self.db.get(User, user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+
+        if related_person_id is not None:
+            linked = self.db.execute(
+                select(userknownperson).where(
+                    userknownperson.c.userid == user_id,
+                    userknownperson.c.personid == related_person_id,
+                )
+            ).first()
+            if not linked:
+                raise ValueError(
+                    f"Person {related_person_id} is not linked to user {user_id}"
+                )
+
         event = CalendarEvent(
             userid=user_id,
             relatedpersonid=related_person_id,
@@ -51,31 +77,7 @@ class CalendarService:
         self.db.add(event)
         self.db.commit()
         self.db.refresh(event)
-        
+
         event_id = event.eventid
         logger.info(f"Created calendar event {event_id}")
-        
-        # Sync to Google Calendar
-        sync_warning = None
-        user = self.db.get(User, user_id)
-        if user and user.google_token_json:
-            # Calculate reminder minutes if reminder_time is set
-            reminder_minutes = None
-            if reminder_time and event_datetime:
-                delta = event_datetime - reminder_time
-                reminder_minutes = int(delta.total_seconds() / 60)
-            
-            success, gcal_event_id = self.google_calendar.create_event(
-                summary=event_title,
-                start_datetime=event_datetime,
-                reminder_minutes=reminder_minutes,
-                user_token_json=user.google_token_json,
-            )
-            if not success:
-                sync_warning = "Failed to sync event to Google Calendar"
-                logger.warning(f"Event {event_id} created but Google Calendar sync failed")
-        else:
-            sync_warning = "No Google token available, event not synced to Google Calendar"
-            logger.info(f"Event {event_id} created but not synced (no Google token)")
-        
-        return event_id, sync_warning
+        return event_id

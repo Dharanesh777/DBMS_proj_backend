@@ -19,9 +19,7 @@ async def create_note(
     db: Session = Depends(get_db),
 ):
     """
-    Create a note and sync to Google Tasks.
-    
-    Note is stored in DB and synced to Google Tasks if user has OAuth token.
+    Create a note.
     """
     try:
         # Get user_id from interaction
@@ -29,25 +27,21 @@ async def create_note(
         conversation = db.get(Conversation, request.interaction_id)
         if not conversation:
             raise HTTPException(status_code=404, detail="Interaction not found")
-        
+
         user_id = conversation.userid
-        
+
         note_service = NoteService(db)
-        
-        note_id, sync_warning = note_service.create_note(
+        note_id = note_service.create_note(
             interaction_id=request.interaction_id,
             content=request.content,
             user_id=user_id,
         )
-        
-        return NoteCreateResponse(
-            note_id=note_id,
-            sync_warning=sync_warning,
-        )
-    
+
+        return NoteCreateResponse(note_id=note_id)
+
     except HTTPException:
         raise
-    
+
     except Exception as e:
         logger.error(f"Error creating note: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

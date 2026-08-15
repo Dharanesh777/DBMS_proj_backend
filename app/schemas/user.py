@@ -27,8 +27,16 @@ class UserUpdate(UserBase):
 
 
 class UserResponse(UserBase):
-    """Schema for user response"""
+    """Schema for user response.
+
+    email is widened back to a plain str (not EmailStr) here — this serializes
+    EXISTING rows, and strict format validation on read means one legacy row
+    with an atypical email (e.g. a .local domain, which email-validator treats
+    as a reserved TLD) would 500 the entire list for every caller. Format is
+    still enforced on write via UserCreate.email: EmailStr.
+    """
     userid: int
+    email: Optional[str] = None
     createdat: Optional[datetime] = None
 
     class Config:

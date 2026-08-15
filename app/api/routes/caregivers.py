@@ -52,33 +52,35 @@ def create_caregiver(
 @router.get("/{caregiver_id}", response_model=CaregiverResponse)
 def get_caregiver(
     caregiver_id: int,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — caregiver must be assigned to this user"),
     db: Session = Depends(get_db),
 ):
     """
-    Get caregiver by ID.
+    Get caregiver by ID. Only returns the caregiver if assigned to user_id.
     """
     service = CaregiverService(db)
-    caregiver = service.get_caregiver(caregiver_id)
-    
+    caregiver = service.get_caregiver_for_user(caregiver_id, user_id)
+
     if not caregiver:
         raise HTTPException(status_code=404, detail=f"Caregiver {caregiver_id} not found")
-    
+
     return caregiver
 
 
 @router.get("/", response_model=CaregiverListResponse)
 def list_caregivers(
+    user_id: int = Query(..., gt=0, description="Caller's user ID"),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
     db: Session = Depends(get_db),
 ):
     """
-    List all caregivers with pagination.
+    List caregivers assigned to user_id, with pagination.
     """
     service = CaregiverService(db)
-    caregivers = service.list_caregivers(skip=skip, limit=limit)
-    total = service.count_caregivers()
-    
+    caregivers = service.list_caregivers_for_user(user_id, skip=skip, limit=limit)
+    total = service.count_caregivers_for_user(user_id)
+
     return CaregiverListResponse(caregivers=caregivers, total=total)
 
 
@@ -86,27 +88,29 @@ def list_caregivers(
 def update_caregiver(
     caregiver_id: int,
     caregiver_data: CaregiverUpdate,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — caregiver must be assigned to this user"),
     db: Session = Depends(get_db),
 ):
     """
-    Update caregiver information.
-    
+    Update caregiver information. Only permitted if caregiver_id is assigned to user_id.
+
     All fields are optional. Only provided fields will be updated.
     """
     try:
         service = CaregiverService(db)
         caregiver = service.update_caregiver(
             caregiver_id=caregiver_id,
+            user_id=user_id,
             name=caregiver_data.name,
             relationshiptouser=caregiver_data.relationshiptouser,
             accesslevel=caregiver_data.accesslevel,
         )
         return caregiver
-    
+
     except ValueError as e:
         logger.warning(f"Caregiver update failed: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+
     except Exception as e:
         logger.error(f"Error updating caregiver: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update caregiver: {str(e)}")
@@ -115,19 +119,20 @@ def update_caregiver(
 @router.delete("/{caregiver_id}", status_code=204)
 def delete_caregiver(
     caregiver_id: int,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — caregiver must be assigned to this user"),
     db: Session = Depends(get_db),
 ):
     """
-    Delete a caregiver.
-    
+    Delete a caregiver. Only permitted if caregiver_id is assigned to user_id.
+
     This will also remove all user-caregiver assignments.
     """
     service = CaregiverService(db)
-    deleted = service.delete_caregiver(caregiver_id)
-    
+    deleted = service.delete_caregiver(caregiver_id, user_id)
+
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Caregiver {caregiver_id} not found")
-    
+
     return None
 
 

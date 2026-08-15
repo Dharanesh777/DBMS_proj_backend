@@ -13,10 +13,13 @@ class EmotionRecord(Base):
 
     emotionid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     interactionid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.conversation.interactionid")
+        Integer, ForeignKey("public.conversation.interactionid", ondelete="CASCADE"), index=True
     )
     emotiontype: Mapped[str | None] = mapped_column(String(50))
     confidencelevel: Mapped[float | None] = mapped_column(Numeric(5, 2))
 
     # Relationships
     conversation = relationship("Conversation", back_populates="emotions")
+
+    def __repr__(self) -> str:
+        return f"<EmotionRecord emotionid={self.emotionid} interactionid={self.interactionid} type={self.emotiontype!r}>"

@@ -9,13 +9,11 @@ from dotenv import load_dotenv
 
 from app.routes.main_routes import main_router
 from app.routes.audio_routes import audio_router
-from app.routes.face_routes import face_router
 from app.routes.interaction_routes import interaction_router
 from app.ai_models.reminders.reminder_routes import reminder_router
 from app.api.routes import (
     users,
     caregivers,
-    persons,
     interactions,
     sessions,
     memory,
@@ -24,7 +22,6 @@ from app.api.routes import (
     audio,
     emotions,
 )
-from app.core.scheduler import start_scheduler, shutdown_scheduler, get_scheduler
 from app.services.session_service import SessionManager
 
 load_dotenv()
@@ -41,21 +38,18 @@ async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────────────
     logger.info("Starting DBMS Project API...")
 
-    start_scheduler()
-    logger.info("APScheduler started")
-
-    # Startup recovery: clear orphaned session state from the memory-assistant backend
+    # Startup recovery: clear orphaned in-memory session state. Session timers
+    # themselves now live in Celery/Redis (see session_service.py), which
+    # persist across a web-process restart unlike the old in-memory APScheduler
+    # job store — a timer firing after this clears its session state just hits
+    # session_service.py's "session state not found" no-op guard.
     SessionManager.clear_all_sessions()
-    scheduler = get_scheduler()
-    scheduler.remove_all_jobs()
-    logger.info("Cleared orphaned session state and timers")
+    logger.info("Cleared orphaned in-memory session state")
 
     yield
 
     # ── Shutdown ──────────────────────────────────────────────────────────────
     logger.info("Shutting down DBMS Project API...")
-    shutdown_scheduler()
-    logger.info("APScheduler shut down")
 
 
 app = FastAPI(
@@ -71,7 +65,7 @@ app.mount("/dashboard", StaticFiles(directory="app/static", html=True), name="st
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -95,13 +89,11 @@ async def health_check():
 
 app.include_router(main_router)
 app.include_router(audio_router)
-app.include_router(face_router)
 app.include_router(interaction_router)
 app.include_router(reminder_router)
 
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(caregivers.router, prefix="/api/caregivers", tags=["Caregivers"])
-app.include_router(persons.router, prefix="/api/persons", tags=["Persons"])
 app.include_router(interactions.router, prefix="/api/interactions", tags=["Interactions"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["Sessions"])
 app.include_router(memory.router, prefix="/api/memory", tags=["Memory"])

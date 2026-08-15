@@ -129,15 +129,21 @@ def delete_user(
 ):
     """
     Delete a user.
-    
+
     WARNING: This will cascade delete all related data (interactions, notes, etc.)
+    once the DB schema's ON DELETE CASCADE constraints are in place. If the deployed
+    schema doesn't have them yet, deletion is rejected with a 409 instead of crashing.
     """
-    service = UserService(db)
-    deleted = service.delete_user(user_id)
-    
+    try:
+        service = UserService(db)
+        deleted = service.delete_user(user_id)
+    except ValueError as e:
+        logger.warning(f"User deletion blocked: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
+
     if not deleted:
         raise HTTPException(status_code=404, detail=f"User {user_id} not found")
-    
+
     return None
 
 

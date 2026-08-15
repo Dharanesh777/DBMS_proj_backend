@@ -9,15 +9,15 @@ from app.db.base import Base
 usercaregiver = Table(
     "usercaregiver",
     Base.metadata,
-    Column("userid", Integer, ForeignKey("public.users.userid"), primary_key=True),
-    Column("caregiverid", Integer, ForeignKey("public.caregiver.caregiverid"), primary_key=True),
+    Column("userid", Integer, ForeignKey("public.users.userid", ondelete="CASCADE"), primary_key=True),
+    Column("caregiverid", Integer, ForeignKey("public.caregiver.caregiverid", ondelete="CASCADE"), primary_key=True),
     schema="public",
 )
 
 userknownperson = Table(
     "userknownperson",
     Base.metadata,
-    Column("userid", Integer, ForeignKey("public.users.userid"), primary_key=True),
-    Column("personid", Integer, ForeignKey("public.knownperson.personid"), primary_key=True),
+    Column("userid", Integer, ForeignKey("public.users.userid", ondelete="CASCADE"), primary_key=True),
+    Column("personid", Integer, ForeignKey("public.knownperson.personid", ondelete="CASCADE"), primary_key=True),
     schema="public",
 )

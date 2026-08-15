@@ -46,8 +46,9 @@ class InteractionService:
             ValueError: If an active interaction already exists for this user
         """
         # Check for existing active interaction for this user
-        # Active = tracked in SessionManager's in-memory state
-        active_interactions = SessionManager._active_sessions
+        # Active = tracked in SessionManager's in-memory state. Snapshot under lock
+        # so this iteration can't race a concurrent mutation of the live dict.
+        active_interactions = SessionManager.snapshot_active_sessions()
         for interaction_id, session_state in active_interactions.items():
             if session_state.user_id == user_id:
                 raise ValueError(
@@ -109,7 +110,7 @@ class InteractionService:
         self.session_manager.cancel_session_timer(interaction_id)
         
         # Get session state
-        session_state = SessionManager._active_sessions.get(interaction_id)
+        session_state = SessionManager.snapshot_active_sessions().get(interaction_id)
         if not session_state:
             logger.warning(f"No active session state for interaction {interaction_id}")
             # Return empty summary if no session was active

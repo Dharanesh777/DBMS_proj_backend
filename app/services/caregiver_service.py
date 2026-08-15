@@ -3,7 +3,7 @@ services/caregiver_service.py — Business logic for Caregiver management
 """
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import select, insert, delete
+from sqlalchemy import select, insert, delete, func
 from typing import Optional
 
 from app.models.caregiver import Caregiver
@@ -50,79 +50,103 @@ class CaregiverService:
         return caregiver
 
     def get_caregiver(self, caregiver_id: int) -> Optional[Caregiver]:
-        """Get caregiver by ID"""
+        """Get caregiver by ID, with no ownership scoping. Internal use only —
+        route handlers must use get_caregiver_for_user instead."""
         return self.db.execute(
             select(Caregiver).where(Caregiver.caregiverid == caregiver_id)
         ).scalar_one_or_none()
 
-    def list_caregivers(self, skip: int = 0, limit: int = 100) -> list[Caregiver]:
-        """List all caregivers with pagination"""
+    def get_caregiver_for_user(self, caregiver_id: int, user_id: int) -> Optional[Caregiver]:
+        """Get a caregiver by ID, scoped to caregivers actually assigned to user_id."""
+        return self.db.execute(
+            select(Caregiver)
+            .join(usercaregiver, Caregiver.caregiverid == usercaregiver.c.caregiverid)
+            .where(
+                Caregiver.caregiverid == caregiver_id,
+                usercaregiver.c.userid == user_id,
+            )
+        ).scalar_one_or_none()
+
+    def list_caregivers_for_user(self, user_id: int, skip: int = 0, limit: int = 100) -> list[Caregiver]:
+        """List caregivers assigned to user_id, with pagination."""
         return list(
             self.db.execute(
-                select(Caregiver).offset(skip).limit(limit)
+                select(Caregiver)
+                .join(usercaregiver, Caregiver.caregiverid == usercaregiver.c.caregiverid)
+                .where(usercaregiver.c.userid == user_id)
+                .order_by(Caregiver.caregiverid)
+                .offset(skip)
+                .limit(limit)
             ).scalars()
         )
 
-    def count_caregivers(self) -> int:
-        """Count total caregivers"""
-        return self.db.query(Caregiver).count()
+    def count_caregivers_for_user(self, user_id: int) -> int:
+        """Count caregivers assigned to user_id."""
+        return self.db.execute(
+            select(func.count(Caregiver.caregiverid))
+            .join(usercaregiver, Caregiver.caregiverid == usercaregiver.c.caregiverid)
+            .where(usercaregiver.c.userid == user_id)
+        ).scalar_one()
 
     def update_caregiver(
         self,
         caregiver_id: int,
+        user_id: int,
         name: Optional[str] = None,
         relationshiptouser: Optional[str] = None,
         accesslevel: Optional[str] = None,
     ) -> Caregiver:
         """
-        Update caregiver information.
-        
+        Update caregiver information. Only permitted if caregiver_id is assigned to user_id.
+
         Args:
             caregiver_id: Caregiver ID to update
+            user_id: Caller's user ID — caregiver must be assigned to this user
             name: New name (optional)
             relationshiptouser: New relationship (optional)
             accesslevel: New access level (optional)
-        
+
         Returns:
             Updated Caregiver object
-        
+
         Raises:
-            ValueError: If caregiver not found
+            ValueError: If caregiver not found or not assigned to user_id
         """
-        caregiver = self.get_caregiver(caregiver_id)
+        caregiver = self.get_caregiver_for_user(caregiver_id, user_id)
         if not caregiver:
-            raise ValueError(f"Caregiver {caregiver_id} not found")
-        
+            raise ValueError(f"Caregiver {caregiver_id} not found for user {user_id}")
+
         if name is not None:
             caregiver.name = name
         if relationshiptouser is not None:
             caregiver.relationshiptouser = relationshiptouser
         if accesslevel is not None:
             caregiver.accesslevel = accesslevel
-        
+
         self.db.commit()
         self.db.refresh(caregiver)
-        
+
         logger.info(f"Updated caregiver {caregiver_id}")
         return caregiver
 
-    def delete_caregiver(self, caregiver_id: int) -> bool:
+    def delete_caregiver(self, caregiver_id: int, user_id: int) -> bool:
         """
-        Delete a caregiver.
-        
+        Delete a caregiver. Only permitted if caregiver_id is assigned to user_id.
+
         Args:
             caregiver_id: Caregiver ID to delete
-        
+            user_id: Caller's user ID — caregiver must be assigned to this user
+
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if not found for this user
         """
-        caregiver = self.get_caregiver(caregiver_id)
+        caregiver = self.get_caregiver_for_user(caregiver_id, user_id)
         if not caregiver:
             return False
-        
+
         self.db.delete(caregiver)
         self.db.commit()
-        
+
         logger.info(f"Deleted caregiver {caregiver_id}")
         return True
 

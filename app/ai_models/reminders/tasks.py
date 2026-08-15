@@ -1,9 +1,16 @@
+import os
 from app.ai_models.reminders.celery_config import celery_app
 import redis
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
-@celery_app.task
+_redis_pool = redis.ConnectionPool(
+    host=REDIS_HOST, port=REDIS_PORT, db=0, retry_on_timeout=True,
+)
+r = redis.Redis(connection_pool=_redis_pool)
+
+@celery_app.task(autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 5})
 def remind_user(user_id, message):
     try:
         import sys

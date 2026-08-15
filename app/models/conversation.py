@@ -7,8 +7,9 @@ Schema columns:
   location, conversation (raw TEXT), summarytext, emotiondetected
 
 The spec's two-level session abstraction (interaction + conversation_session) is NOT
-in the DB schema. We implement session buffering in application memory (via
-APScheduler) and flush the merged summary into `summarytext` at session close.
+in the DB schema. We implement session buffering in application memory (with
+Celery-scheduled timers, see session_service.py) and flush the merged summary
+into `summarytext` at session close.
 The `conversation` column accumulates all raw transcript chunks (appended as text).
 """
 from datetime import datetime
@@ -23,10 +24,10 @@ class Conversation(Base):
 
     interactionid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     userid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.users.userid")
+        Integer, ForeignKey("public.users.userid", ondelete="CASCADE"), index=True
     )
     personid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.knownperson.personid")
+        Integer, ForeignKey("public.knownperson.personid", ondelete="SET NULL"), index=True
     )
     interactiondatetime: Mapped[datetime | None] = mapped_column(
         TIMESTAMP, default=datetime.utcnow
@@ -40,3 +41,6 @@ class Conversation(Base):
     person = relationship("KnownPerson", back_populates="conversations")
     notes = relationship("Note", back_populates="conversation")
     emotions = relationship("EmotionRecord", back_populates="conversation")
+
+    def __repr__(self) -> str:
+        return f"<Conversation interactionid={self.interactionid} userid={self.userid} personid={self.personid}>"

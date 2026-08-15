@@ -103,8 +103,6 @@ def check_face_fast(frame_bytes: bytes) -> bool:
     Ultra-fast, thread-safe detector for the 1-FPS frontend polling.
     Uses pure OpenCV Haar Cascades to avoid PyTorch/MPS threading deadlocks on Mac.
     """
-    import cv2
-    import numpy as np
     from app.services.face_recognition.face_service import get_face_cascade
 
     np_arr = np.frombuffer(frame_bytes, np.uint8)
@@ -114,9 +112,30 @@ def check_face_fast(frame_bytes: bytes) -> bool:
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     cascade = get_face_cascade()
+    if cascade is None or cascade.empty():
+        logger.error("Haar cascade failed to load — cannot run fast face check.")
+        return False
     faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
 
     return len(faces) > 0
+
+
+def _looks_like_audio(data: bytes) -> bool:
+    """Cheap magic-byte check before handing untrusted client bytes to ffmpeg/Whisper."""
+    if len(data) < 12:
+        return False
+    header = data[:12]
+    if header[:4] == b"\x1a\x45\xdf\xa3":  # WebM / Matroska (EBML)
+        return True
+    if header[:4] == b"RIFF" and header[8:12] == b"WAVE":  # WAV
+        return True
+    if header[:4] == b"OggS":  # OGG
+        return True
+    if header[:3] == b"ID3" or header[:2] == b"\xff\xfb":  # MP3
+        return True
+    if header[4:8] == b"ftyp":  # MP4 / M4A
+        return True
+    return False
 
 
 def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: bytes) -> Dict[str, Any]:
@@ -143,6 +162,9 @@ def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: by
         return {"error": "Could not generate face embedding."}
 
     # 2. Audio Processing (Whisper)
+    if not _looks_like_audio(audio_bytes):
+        return {"error": "Audio payload does not look like a supported audio format."}
+
     temp_fd, temp_path = tempfile.mkstemp(suffix=".webm")
     os.close(temp_fd)
 

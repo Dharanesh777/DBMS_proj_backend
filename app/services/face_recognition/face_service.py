@@ -8,6 +8,7 @@ Uses YOLOv8 for person detection and DeepFace for embeddings.
 import os
 import json
 import logging
+import threading
 from typing import Optional, Tuple, List
 
 import cv2
@@ -47,7 +48,7 @@ def get_face_cascade():
         try:
             path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
             _face_cascade = cv2.CascadeClassifier(path)
-        except:
+        except Exception:
             pass
 
         # 2. Try project root fallback with temp file to bypass Windows Unicode path bug
@@ -189,50 +190,57 @@ def generate_embedding(face_image: np.ndarray) -> Optional[List[float]]:
         return None
 
 _face_encodings_cache = None
+_face_encodings_cache_lock = threading.Lock()
 
 def clear_face_cache():
     """Clear the cached face encodings to force a refresh on next compare."""
     global _face_encodings_cache
-    _face_encodings_cache = None
+    with _face_encodings_cache_lock:
+        _face_encodings_cache = None
     logger.info("Face encodings cache cleared.")
+
+def _load_face_encodings_cache() -> list:
+    """Query the DB and build the cache list. Caller must hold _face_encodings_cache_lock."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT personid, encodingdata FROM public.faceencoding")
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+
+        cached = []
+        for pid, data in rows:
+            try:
+                stored_vec = np.array(json.loads(data) if isinstance(data, str) else data, dtype=np.float32)
+                cached.append((pid, stored_vec))
+            except Exception as e:
+                logger.error(f"Error parsing encoding for person {pid}: {e}")
+        logger.info(f"Loaded {len(cached)} face encodings into cache.")
+        return cached
+    except Exception as db_err:
+        logger.error(f"Database error loading face encodings: {db_err}")
+        return []
 
 def compare_embedding(embedding: List[float]) -> tuple[Optional[int], float, str]:
     """Compare embedding against database and return (person_id, confidence, status)."""
     global _face_encodings_cache
-    
-    if _face_encodings_cache is None:
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor()
-            try:
-                cur.execute("SELECT personid, encodingdata FROM public.faceencoding")
-                rows = cur.fetchall()
-            finally:
-                cur.close()
-                conn.close()
-            
-            cached = []
-            for pid, data in rows:
-                try:
-                    stored_vec = np.array(json.loads(data) if isinstance(data, str) else data, dtype=np.float32)
-                    cached.append((pid, stored_vec))
-                except Exception as e:
-                    logger.error(f"Error parsing encoding for person {pid}: {e}")
-            _face_encodings_cache = cached
-            logger.info(f"Loaded {len(_face_encodings_cache)} face encodings into cache.")
-        except Exception as db_err:
-            logger.error(f"Database error loading face encodings: {db_err}")
-            if _face_encodings_cache is None:
-                _face_encodings_cache = []
 
-    if not _face_encodings_cache:
+    with _face_encodings_cache_lock:
+        if _face_encodings_cache is None:
+            _face_encodings_cache = _load_face_encodings_cache()
+        cache_snapshot = _face_encodings_cache
+
+    if not cache_snapshot:
         return None, 0.0, "unknown"
 
     query_vec = np.array(embedding, dtype=np.float32)
     best_pid, best_sim = None, -1.0
     skipped = 0
     
-    for pid, stored_vec in _face_encodings_cache:
+    for pid, stored_vec in cache_snapshot:
         if stored_vec.shape != query_vec.shape:
             skipped += 1
             continue  # Skip dimension-mismatched rows gracefully
@@ -255,9 +263,11 @@ def compare_embedding(embedding: List[float]) -> tuple[Optional[int], float, str
 
 def fetch_details(person_id: int) -> Optional[dict]:
     """Fetch person name, relationship and latest interaction."""
-    conn = get_db_connection()
-    cur = conn.cursor()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
         cur.execute("SELECT name, relationshiptype, notes FROM public.knownperson WHERE personid = %s", (person_id,))
         p = cur.fetchone()
         if not p: return None
@@ -298,5 +308,7 @@ def fetch_details(person_id: int) -> Optional[dict]:
             "last_conversation": c[3] if c and len(c) > 3 else None
         }
     finally:
-        cur.close()
-        conn.close()
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()

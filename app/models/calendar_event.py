@@ -14,10 +14,10 @@ class CalendarEvent(Base):
 
     eventid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     userid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.users.userid")
+        Integer, ForeignKey("public.users.userid", ondelete="CASCADE"), index=True
     )
     relatedpersonid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.knownperson.personid")
+        Integer, ForeignKey("public.knownperson.personid", ondelete="SET NULL"), index=True
     )
     eventtitle: Mapped[str | None] = mapped_column(String(100))
     eventdatetime: Mapped[datetime | None] = mapped_column(TIMESTAMP)
@@ -25,3 +25,6 @@ class CalendarEvent(Base):
 
     user = relationship("User", back_populates="calendar_events")
     related_person = relationship("KnownPerson", back_populates="calendar_events")
+
+    def __repr__(self) -> str:
+        return f"<CalendarEvent eventid={self.eventid} userid={self.userid} title={self.eventtitle!r}>"

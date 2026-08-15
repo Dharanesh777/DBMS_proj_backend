@@ -13,20 +13,33 @@ class BackgroundRecorder:
         self.recording = False
         self.thread = None
         self.filename = None
+        self.last_error: Exception | None = None
+        self._stream_ready = threading.Event()
 
     def callback(self, indata, frames, time, status):
         if status:
             print(f"[MIC STATUS] {status}", flush=True)
         self.q.put(indata.copy())
 
-    def start(self, filename="session_recording.wav", samplerate=None):
+    def start(self, filename="session_recording.wav", samplerate=None, wait_for_ready: float = 1.0) -> bool:
+        """Start recording in a background thread.
+
+        Returns True if the mic stream is confirmed open within `wait_for_ready`
+        seconds, False if it's still starting or failed to open — check
+        self.last_error for the failure reason. Callers should not assume the
+        mic is actually recording just because this method returned.
+        """
         if self.recording:
-            return
+            return True
         self.filename = filename
         self.recording = True
+        self.last_error = None
         self.q = queue.Queue()
+        self._stream_ready.clear()
         self.thread = threading.Thread(target=self._record_loop, args=(samplerate,), daemon=True)
         self.thread.start()
+        ready = self._stream_ready.wait(timeout=wait_for_ready)
+        return ready and self.last_error is None
 
     def _open_input_stream(self, samplerate, attempts=3, retry_delay=0.5):
         """Open the mic, retrying briefly — macOS CoreAudio can still be tearing
@@ -51,6 +64,7 @@ class BackgroundRecorder:
                 samplerate = int(sd.query_devices(kind="input")["default_samplerate"])
             with self._open_input_stream(samplerate) as stream:
                 with sf.SoundFile(self.filename, mode='w', samplerate=samplerate, channels=1) as f:
+                    self._stream_ready.set()
                     while self.recording:
                         try:
                             data = self.q.get(timeout=0.1)
@@ -59,7 +73,9 @@ class BackgroundRecorder:
                             continue
         except Exception as e:
             print(f"❌ Microphone recording error: {e}")
+            self.last_error = e
             self.recording = False
+            self._stream_ready.set()
 
     def stop(self):
         if self.recording:
@@ -73,10 +89,18 @@ _recorder = BackgroundRecorder()
 IS_RECORDING = False
 IS_SUMMARIZING = False
 
-def start_session_recording(filename="session_recording.wav"):
+def start_session_recording(filename="session_recording.wav") -> bool:
+    """Returns True if the mic stream is confirmed recording, False if it failed
+    to start — check recording_error() for why. IS_RECORDING now reflects actual
+    stream state instead of being set unconditionally."""
     global IS_RECORDING
-    IS_RECORDING = True
-    _recorder.start(filename=filename)
+    started = _recorder.start(filename=filename)
+    IS_RECORDING = started
+    return started
+
+def recording_error() -> str | None:
+    """Message from the last recording failure, if any."""
+    return str(_recorder.last_error) if _recorder.last_error else None
 
 def stop_session_recording():
     global IS_RECORDING
@@ -140,15 +164,8 @@ def process_recording_in_background(interaction_id: int, filepath: str):
                             date  = event.get("date")
                             time_str = event.get("time")
                             if title and date and time_str:
-                                try:
-                                    print(f"🚀 Pushing Reminder to Calendar: {title}")
-                                    requests.post(
-                                        "http://localhost:8004/create-reminder",
-                                        json=event,
-                                        timeout=5,
-                                    )
-                                except Exception as sync_err:
-                                    print(f"❌ Calendar sync failed: {sync_err}")
+                                print(f"🚀 Pushing Reminder to Calendar: {title}")
+                                _post_reminder_with_retry(event)
                     else:
                         print("ℹ️ No calendar events to sync.")
 
@@ -166,3 +183,21 @@ def process_recording_in_background(interaction_id: int, filepath: str):
 
     t = threading.Thread(target=_process, daemon=True)
     t.start()
+
+
+def _post_reminder_with_retry(event: dict, attempts: int = 3, base_delay: float = 1.0) -> None:
+    """POST a calendar reminder event, retrying with linear backoff on failure."""
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            requests.post(
+                "http://localhost:8004/create-reminder",
+                json=event,
+                timeout=5,
+            )
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < attempts:
+                time.sleep(base_delay * attempt)
+    print(f"❌ Calendar sync failed after {attempts} attempts: {last_err}")

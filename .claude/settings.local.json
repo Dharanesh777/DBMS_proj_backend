@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv --version)",
+      "Bash(./venv/bin/python3 --version)",
+      "Bash(export UV_HTTP_TIMEOUT=300)",
+      "Bash(uv pip *)",
+      "Bash(wait)",
+      "Bash(export UV_HTTP_TIMEOUT=600)",
+      "Bash(./venv/bin/python3 -c \"import cv2, numpy; from deepface import DeepFace; from ultralytics import YOLO; print\\('cv2:', cv2.__version__\\); print\\('numpy:', numpy.__version__\\); print\\('face/voice recognition imports OK'\\)\")"
+    ]
+  }
+}

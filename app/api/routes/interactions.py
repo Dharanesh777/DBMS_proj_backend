@@ -70,7 +70,12 @@ async def end_interaction(
         # Get the updated record
         from ...models.conversation import Conversation
         conversation = db.get(Conversation, request.interaction_id)
-        
+        if conversation is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interaction {request.interaction_id} not found after ending it",
+            )
+
         return InteractionEndResponse(
             interaction_id=request.interaction_id,
             interaction_summary=conversation.summarytext,
@@ -80,7 +85,10 @@ async def end_interaction(
     except ValueError as e:
         logger.warning(f"Interaction not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+
+    except HTTPException:
+        raise
+
     except Exception as e:
         logger.error(f"Error ending interaction: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
