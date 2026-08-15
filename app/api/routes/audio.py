@@ -14,11 +14,44 @@ from app.schemas.audio import (
     MicRecordRequest,
     MicRecordResponse,
 )
-from app.services.whisper_service import transcribe_audio_file
+from app.services.voice_app.transcription_service import transcribe_audio as transcribe_audio_file
 from app.services.session_service import SessionManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB
+ALLOWED_AUDIO_CONTENT_TYPES = {
+    "audio/wav", "audio/x-wav", "audio/wave",
+    "audio/mpeg", "audio/mp3",
+    "audio/webm", "audio/ogg", "audio/flac",
+    "audio/x-m4a", "audio/mp4",
+}
+
+
+async def _read_upload_with_limits(upload: UploadFile, max_bytes: int = MAX_AUDIO_BYTES) -> bytes:
+    """Read an UploadFile in chunks, enforcing a content-type allow-list and a size cap."""
+    content_type = (upload.content_type or "").lower()
+    if content_type not in ALLOWED_AUDIO_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported audio content type: {content_type or 'unknown'}",
+        )
+
+    chunks = []
+    total = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Audio file exceeds the {max_bytes // (1024 * 1024)}MB limit",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.post("/transcribe", response_model=AudioTranscribeResponse)
@@ -29,7 +62,7 @@ async def transcribe_audio(
 ):
     """
     Transcribe uploaded audio file and append to active session.
-    
+
     This endpoint:
     1. Receives audio file upload
     2. Transcribes using Whisper
@@ -40,16 +73,18 @@ async def transcribe_audio(
         # Save to temp file
         temp_fd, temp_path = tempfile.mkstemp(suffix=".wav")
         os.close(temp_fd)
-        
+
         # Save uploaded file
         with open(temp_path, "wb") as f:
-            content = await audio.read()
+            content = await _read_upload_with_limits(audio)
             f.write(content)
-        
+
         # Transcribe
         text = transcribe_audio_file(temp_path)
+        if text is None:
+            raise HTTPException(status_code=500, detail="Transcription failed.")
         logger.info(f"Transcribed audio for interaction {interaction_id}: {text[:50]}...")
-        
+
         # Append to session
         session_manager = SessionManager(db)
         await session_manager.append_transcript(
@@ -65,7 +100,10 @@ async def transcribe_audio(
     except ValueError as e:
         logger.warning(f"Session not found: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-    
+
+    except HTTPException:
+        raise
+
     except Exception as e:
         logger.error(f"Error transcribing audio: {e}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
@@ -111,14 +149,19 @@ async def record_from_microphone(
         
         # Transcribe
         text = transcribe_audio_file(temp_path)
+        if text is None:
+            raise HTTPException(status_code=500, detail="Transcription failed.")
         logger.info(f"Transcribed microphone recording: {text[:50]}...")
-        
+
         return MicRecordResponse(transcription=text)
         
     except sr.WaitTimeoutError:
         logger.warning("Microphone timeout - no speech detected")
         raise HTTPException(status_code=408, detail="No speech detected within timeout period")
-    
+
+    except HTTPException:
+        raise
+
     except Exception as e:
         logger.error(f"Error recording from microphone: {e}")
         raise HTTPException(status_code=500, detail=f"Recording failed: {str(e)}")

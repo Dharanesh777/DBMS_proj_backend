@@ -19,26 +19,25 @@ async def create_calendar_event(
     db: Session = Depends(get_db),
 ):
     """
-    Create a calendar event and sync to Google Calendar.
-    
-    Event is stored in DB and synced to Google Calendar if user has OAuth token.
+    Create a calendar event.
     """
     try:
         calendar_service = CalendarService(db)
-        
-        event_id, sync_warning = calendar_service.create_event(
+
+        event_id = calendar_service.create_event(
             user_id=request.user_id,
             event_title=request.event_title,
             event_datetime=request.event_datetime,
             related_person_id=request.related_person_id,
             reminder_time=request.reminder_time,
         )
-        
-        return CalendarEventCreateResponse(
-            event_id=event_id,
-            sync_warning=sync_warning,
-        )
-    
+
+        return CalendarEventCreateResponse(event_id=event_id)
+
+    except ValueError as e:
+        logger.warning(f"Calendar event creation rejected: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
     except Exception as e:
         logger.error(f"Error creating calendar event: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

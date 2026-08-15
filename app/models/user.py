@@ -1,9 +1,13 @@
 """
 models/user.py — ORM model for public.users
-Schema columns: userid, name, age, medicalcondition, emergencycontact, email, google_token_json, createdat
+Schema columns: userid, name, age, medicalcondition, emergencycontact, email, createdat
+
+The google_token_json column (from the removed DB-backed Google OAuth path,
+see calendar_service.py / note_service.py) was dropped via Alembic migration
+74bf5b968796.
 """
 from datetime import datetime
-from sqlalchemy import Integer, String, Text, TIMESTAMP, JSON
+from sqlalchemy import Integer, String, Text, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
@@ -18,7 +22,6 @@ class User(Base):
     medicalcondition: Mapped[str | None] = mapped_column(Text)
     emergencycontact: Mapped[str | None] = mapped_column(String(20))
     email: Mapped[str | None] = mapped_column(String(150), unique=True)
-    google_token_json: Mapped[dict | None] = mapped_column(JSON)
     createdat: Mapped[datetime | None] = mapped_column(
         TIMESTAMP, default=datetime.utcnow
     )
@@ -36,3 +39,6 @@ class User(Base):
         secondary="public.usercaregiver",
         back_populates="users",
     )
+
+    def __repr__(self) -> str:
+        return f"<User userid={self.userid} name={self.name!r}>"

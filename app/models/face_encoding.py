@@ -19,7 +19,7 @@ class FaceEncoding(Base):
 
     faceencodingid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     personid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.knownperson.personid")
+        Integer, ForeignKey("public.knownperson.personid", ondelete="CASCADE"), index=True
     )
     encodingdata: Mapped[str | None] = mapped_column(Text)  # JSON-serialised float[]
     confidencescore: Mapped[float | None] = mapped_column(Numeric(5, 2))
@@ -29,12 +29,20 @@ class FaceEncoding(Base):
 
     person = relationship("KnownPerson", back_populates="face_encodings")
 
+    def __repr__(self) -> str:
+        return f"<FaceEncoding faceencodingid={self.faceencodingid} personid={self.personid}>"
+
     # ── Helpers ───────────────────────────────────────────────────────────────
     def get_encoding_vector(self) -> list[float]:
         """Deserialise the TEXT column into a Python float list."""
         if self.encodingdata is None:
             return []
-        return json.loads(self.encodingdata)
+        try:
+            return json.loads(self.encodingdata)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"FaceEncoding {self.faceencodingid} has corrupted encodingdata: {e}"
+            ) from e
 
     @staticmethod
     def serialise_encoding(vector: list[float]) -> str:

@@ -4,6 +4,7 @@ services/user_service.py — Business logic for User management
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 
 from app.models.user import User
@@ -83,7 +84,7 @@ class UserService:
         """List all users with pagination"""
         return list(
             self.db.execute(
-                select(User).offset(skip).limit(limit)
+                select(User).order_by(User.userid).offset(skip).limit(limit)
             ).scalars()
         )
 
@@ -146,20 +147,34 @@ class UserService:
     def delete_user(self, user_id: int) -> bool:
         """
         Delete a user.
-        
+
         Args:
             user_id: User ID to delete
-        
+
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            ValueError: If the user has linked records that block deletion at the DB level
+                (e.g. the live schema doesn't yet have the ondelete=CASCADE/SET NULL
+                constraints declared on the ORM models — those only take effect once a
+                migration or schema recreation applies them).
         """
         user = self.get_user(user_id)
         if not user:
             return False
-        
-        self.db.delete(user)
-        self.db.commit()
-        
+
+        try:
+            self.db.delete(user)
+            self.db.commit()
+        except IntegrityError as e:
+            self.db.rollback()
+            logger.warning(f"Delete blocked for user {user_id} — linked records still reference it: {e}")
+            raise ValueError(
+                f"Cannot delete user {user_id}: other records (conversations, calendar "
+                "events, etc.) still reference it."
+            ) from e
+
         logger.info(f"Deleted user {user_id}")
         return True
 

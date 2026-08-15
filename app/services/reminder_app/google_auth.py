@@ -16,10 +16,12 @@ CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.json")
 
 import hashlib
 import base64
+import secrets
 
-# Use a fixed verifier for local development to avoid PKCE state loss
-FIXED_VERIFIER = "this_is_a_fixed_verifier_for_local_development_testing_123"
-code_challenge = base64.urlsafe_b64encode(hashlib.sha256(FIXED_VERIFIER.encode()).digest()).decode().replace("=", "")
+# The verifier lives only for the lifetime of a single auth flow (auth_url -> callback),
+# regenerated per call to get_auth_url(). Not safe under concurrent overlapping flows,
+# but this app only ever runs one flow at a time.
+_pending_verifier = None
 
 def get_flow():
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
@@ -31,6 +33,12 @@ def get_flow():
     )
 
 def get_auth_url():
+    global _pending_verifier
+    _pending_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(_pending_verifier.encode()).digest()
+    ).decode().replace("=", "")
+
     flow = get_flow()
     # Manually pass the challenge to Google
     auth_url, _ = flow.authorization_url(
@@ -41,9 +49,10 @@ def get_auth_url():
     return auth_url
 
 def exchange_code_for_token(code: str):
+    if _pending_verifier is None:
+        raise RuntimeError("No pending auth flow — call get_auth_url() first.")
     flow = get_flow()
-    # Use the same fixed verifier to exchange the code
-    flow.fetch_token(code=code, code_verifier=FIXED_VERIFIER)
+    flow.fetch_token(code=code, code_verifier=_pending_verifier)
     creds = flow.credentials
     # Save token to file so you don't need to login again
     with open(TOKEN_FILE, "w") as f:

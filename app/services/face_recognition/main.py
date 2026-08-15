@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import tempfile
 import time
 import threading
 from datetime import datetime, timezone
@@ -56,7 +57,10 @@ _session = {
     "pending_audio_path": None,
 }
 UNKNOWN_STREAK_THRESHOLD = 3   # need this many consecutive unknowns to start unknown session
-_session_lock = threading.Lock()
+# RLock (not Lock) — _start_session/_start_unknown_session/_end_session already take
+# this lock internally, and /identify's own critical sections call into them while
+# still holding it. A plain Lock would deadlock on that same-thread re-acquisition.
+_session_lock = threading.RLock()
 
 # Persisted across _end_session so /register-new can use the original embedding
 _saved_unknown_embedding = None
@@ -245,7 +249,8 @@ def _end_session(reason: str = "face_lost"):
     elif filepath and not interaction_id:
         # Unknown person — audio file will be processed after they register
         _push_log("[MIC] 🔖 Audio saved — will process after registration")
-        _session["pending_audio_path"] = filepath
+        with _session_lock:
+            _session["pending_audio_path"] = filepath
 
     return pending_emb
 
@@ -264,7 +269,8 @@ async def identify(file: UploadFile = File(...)):
     """
     import app.services.voice_app.recorder_util as ru
     now = time.time()
-    state = _session["state"]
+    with _session_lock:
+        state = _session["state"]
 
     # ── During active session or grace: lightweight presence only ───────────
     if state in ("session_active", "grace_period", "processing"):
@@ -272,29 +278,34 @@ async def identify(file: UploadFile = File(...)):
         if state == "session_active":
             # Only decode frame + run YOLO when the 10s interval has elapsed
             # Between checks just return session info (zero extra CPU work)
-            time_since_check = now - _session["last_presence_check"]
+            with _session_lock:
+                time_since_check = now - _session["last_presence_check"]
             if time_since_check >= PRESENCE_CHECK_INTERVAL:
                 frame = _decode_frame(file)
                 present = _has_presence(frame)
-                _session["last_presence_check"] = now
+                with _session_lock:
+                    _session["last_presence_check"] = now
+                    session_started_at = _session["session_started_at"]
+                    if not present:
+                        _session["state"] = "grace_period"
+                        _session["grace_started_at"] = now
                 if present:
-                    _push_log(f"[PRESENCE] ✅ Face confirmed at {int(now - _session['session_started_at'])}s")
+                    _push_log(f"[PRESENCE] ✅ Face confirmed at {int(now - session_started_at)}s")
                 else:
-                    # Enter grace period
-                    _session["state"] = "grace_period"
-                    _session["grace_started_at"] = now
-                    _push_log(f"[GRACE] ⚠️ Face lost after {int(now - _session['session_started_at'])}s — {GRACE_PERIOD_SECONDS}s to return")
+                    _push_log(f"[GRACE] ⚠️ Face lost after {int(now - session_started_at)}s — {GRACE_PERIOD_SECONDS}s to return")
 
         elif state == "grace_period":
             # During grace we check every call (fast 500ms loop) so countdown is accurate
             frame = _decode_frame(file)
             present = _has_presence(frame)
-            grace_elapsed = now - _session["grace_started_at"]
+            with _session_lock:
+                grace_elapsed = now - _session["grace_started_at"]
+                if present:
+                    # Face returned — reset presence timer and go back to session
+                    _session["state"] = "session_active"
+                    _session["last_presence_check"] = now
 
             if present:
-                # Face returned — reset presence timer and go back to session
-                _session["state"] = "session_active"
-                _session["last_presence_check"] = now
                 _push_log("[GRACE] ✅ Face returned — session continues")
             elif grace_elapsed >= GRACE_PERIOD_SECONDS:
                 pending_emb = _end_session("face_lost_grace_expired")
@@ -306,17 +317,21 @@ async def identify(file: UploadFile = File(...)):
                 })
             else:
                 countdown = int(GRACE_PERIOD_SECONDS - grace_elapsed)
+                with _session_lock:
+                    person_name = _session["person_name"]
                 return JSONResponse({
                     "session_state": "grace_period",
                     "grace_countdown": countdown,
-                    "person_name": _session["person_name"],
+                    "person_name": person_name,
                     "is_recording": ru.IS_RECORDING,
                     "is_summarizing": ru.IS_SUMMARIZING,
                 })
 
+        with _session_lock:
+            person_name = _session["person_name"]
         return JSONResponse({
             "session_state": state,
-            "person_name": _session["person_name"],
+            "person_name": person_name,
             "is_recording": ru.IS_RECORDING,
             "is_summarizing": ru.IS_SUMMARIZING,
         })
@@ -336,7 +351,8 @@ async def identify(file: UploadFile = File(...)):
 
     if status in ("confirmed", "uncertain"):
         # Reset unknown streak on a successful match
-        _session["unknown_streak"] = 0
+        with _session_lock:
+            _session["unknown_streak"] = 0
         details = fetch_details(pid) or {}
         name = details.get("name", f"Person {pid}")
         _push_log(f"[FACE] {status.upper()} — {name} (confidence={score:.2f})")
@@ -356,8 +372,9 @@ async def identify(file: UploadFile = File(...)):
     else:
         # Unknown person — require UNKNOWN_STREAK_THRESHOLD consecutive unknowns
         # before starting a session. Prevents transient misdetections.
-        _session["unknown_streak"] = _session.get("unknown_streak", 0) + 1
-        streak = _session["unknown_streak"]
+        with _session_lock:
+            _session["unknown_streak"] = _session.get("unknown_streak", 0) + 1
+            streak = _session["unknown_streak"]
         _push_log(f"[FACE] UNKNOWN (score={score:.2f}) — streak {streak}/{UNKNOWN_STREAK_THRESHOLD}")
 
         if streak < UNKNOWN_STREAK_THRESHOLD:
@@ -371,7 +388,8 @@ async def identify(file: UploadFile = File(...)):
             })
 
         # Confirmed unknown after N consecutive detections — start session
-        _session["unknown_streak"] = 0
+        with _session_lock:
+            _session["unknown_streak"] = 0
         _push_log(f"[FACE] UNKNOWN confirmed — starting session, registration deferred to end")
         _start_unknown_session()
         with _session_lock:
@@ -390,17 +408,20 @@ def session_status():
     """Frontend polls this to get full current state."""
     import app.services.voice_app.recorder_util as ru
     now = time.time()
+    with _session_lock:
+        session_snapshot = dict(_session)
+
     grace_countdown = 0
-    if _session["state"] == "grace_period":
-        grace_countdown = max(0, int(GRACE_PERIOD_SECONDS - (now - _session["grace_started_at"])))
+    if session_snapshot["state"] == "grace_period":
+        grace_countdown = max(0, int(GRACE_PERIOD_SECONDS - (now - session_snapshot["grace_started_at"])))
     return {
-        "state": _session["state"],
-        "person_name": _session["person_name"],
-        "session_duration": int(now - _session["session_started_at"]) if _session["session_started_at"] else 0,
+        "state": session_snapshot["state"],
+        "person_name": session_snapshot["person_name"],
+        "session_duration": int(now - session_snapshot["session_started_at"]) if session_snapshot["session_started_at"] else 0,
         "grace_countdown": grace_countdown,
         "is_recording": ru.IS_RECORDING,
         "is_summarizing": ru.IS_SUMMARIZING,
-        "needs_registration": _session.get("pending_unknown_embedding") is not None,
+        "needs_registration": session_snapshot.get("pending_unknown_embedding") is not None,
     }
 
 
@@ -417,6 +438,65 @@ async def check_presence(file: UploadFile = File(...)):
     frame = _decode_frame(file)
     present = _has_presence(frame)
     return {"person_present": present}
+
+
+MAX_IDLE_AUDIO_BYTES = 10 * 1024 * 1024  # 10 MB — one ~10s chunk is a few hundred KB
+
+
+@app.post("/idle-audio")
+async def idle_audio(file: UploadFile = File(...)):
+    """
+    Client-side idle-state audio capture (replaces the old server-side mic
+    recording — record_audio_with_vad/record_audio_from_mic captured the HOST
+    machine's own mic, not the caller's, which doesn't work for anything beyond
+    a single local desktop). The frontend records fixed-interval chunks from the
+    CLIENT's microphone while sessionState is 'idle' and posts each one here.
+
+    Only processes while the session state machine is actually idle — if a
+    session started between the frontend deciding to send and this request
+    arriving, the chunk is dropped rather than mixed into an active session's
+    transcript.
+    """
+    with _session_lock:
+        state = _session["state"]
+    if state != "idle":
+        return JSONResponse({"status": "skipped", "reason": f"session state is '{state}', not idle"})
+
+    content = await file.read(MAX_IDLE_AUDIO_BYTES + 1)
+    if len(content) > MAX_IDLE_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Idle audio chunk too large.")
+    if not content:
+        return JSONResponse({"status": "empty"})
+
+    temp_path = None
+    try:
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".webm")
+        os.close(temp_fd)
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        import app.services.voice_app.transcription_service as ts
+        text = ts.transcribe_audio(temp_path)
+
+        if not text or not text.strip() or len(text.strip()) < 2:
+            return JSONResponse({"status": "empty"})
+
+        interaction_id = save_conversation(
+            userid=USER_ID,
+            personid=None,
+            transcribed_text=text,
+            summarized_text=None,
+            detected_emotion=None,
+            location="Living Room",
+        )
+        _push_log(f"[IDLE AUDIO] Transcribed: {text[:50]}...")
+        return JSONResponse({"status": "saved", "transcription": text, "interactionid": interaction_id})
+    except Exception as e:
+        logger.error(f"Idle audio processing failed: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @app.post("/register-new")
@@ -448,9 +528,17 @@ async def register_new(
             detail="No face embedding available. Please ensure a face was detected during the session."
         )
 
-    conn = get_db_connection()
-    cur = conn.cursor()
+    # ── Registration: must commit before anything below, since _save_initial_interaction
+    # opens a SEPARATE connection and inserts a row with an FK to this knownperson row —
+    # that insert would hang/deadlock waiting on an uncommitted referenced row. So this
+    # transaction boundary is real, not just convenience: everything after the commit is
+    # best-effort cleanup whose failure must NOT be reported as a failed registration,
+    # since the person/encoding are already permanently saved by that point.
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO public.knownperson (name, relationshiptype, prioritylevel, notes)
@@ -471,41 +559,61 @@ async def register_new(
         encoding_id = cur.fetchone()[0]
         conn.commit()
         _push_log(f"[REGISTER] ✅ Registered: {name} ({relationship}) | personid={person_id}")
+    except Exception as exc:
+        if conn is not None:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
 
-        # Clear the stored embedding now that registration is complete
-        _saved_unknown_embedding = None
+    # ── Best-effort post-registration side effects — none of these can un-succeed
+    # the registration above, so their failures are logged, not raised.
+    _saved_unknown_embedding = None
 
-        # Retrieve the audio file saved during the unknown session
+    with _session_lock:
         pending_audio = _session.get("pending_audio_path")
         _session["pending_audio_path"] = None
 
-        # Create the conversation row now that we know who the person is
+    interaction_id = None
+    try:
         interaction_id = _save_initial_interaction(person_id)
+    except Exception as e:
+        logger.error(f"Post-registration: failed to create interaction for person {person_id}: {e}")
 
-        # Clear face cache to reload the newly registered face encoding
+    try:
         from app.services.face_recognition.face_service import clear_face_cache
         clear_face_cache()
+    except Exception as e:
+        logger.error(f"Post-registration: failed to clear face cache: {e}")
 
-        # End session (resets state to idle)
+    try:
         _end_session("registered")
+    except Exception as e:
+        logger.error(f"Post-registration: failed to end session cleanly: {e}")
 
-        # Transcribe + summarize the saved audio file
-        if pending_audio and interaction_id:
-            _push_log(f"[MIC] ⚙️ Processing session audio for {name}...")
-            import app.services.voice_app.recorder_util as ru
+    if pending_audio and interaction_id:
+        _push_log(f"[MIC] ⚙️ Processing session audio for {name}...")
+        import app.services.voice_app.recorder_util as ru
+        try:
             ru.process_recording_in_background(interaction_id, pending_audio)
+        except Exception as e:
+            logger.error(f"Post-registration: failed to kick off audio processing: {e}")
 
-        return JSONResponse({
-            "message": f"{name} registered successfully.",
-            "personid": person_id,
-            "faceencodingid": encoding_id,
-        })
-    except Exception as exc:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        cur.close()
-        conn.close()
+    return JSONResponse({
+        "message": f"{name} registered successfully.",
+        "personid": person_id,
+        "faceencodingid": encoding_id,
+    })
+
+
+@app.get("/config/provider")
+def get_provider():
+    """Current LLM provider — lets the frontend reconcile its localStorage cache
+    with actual server state on load, instead of trusting a stale local value."""
+    return {"provider": os.environ.get("LLM_PROVIDER", "groq")}
 
 
 @app.post("/config/provider")
@@ -545,9 +653,11 @@ async def register(
     embedding, _ = _run_pipeline(frame)
     if embedding is None:
         raise HTTPException(status_code=422, detail="Could not generate face embedding.")
-    conn = get_db_connection()
-    cur = conn.cursor()
+    conn = None
+    cur = None
     try:
+        conn = get_db_connection()
+        cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO public.faceencoding (personid, encodingdata, confidencescore)
@@ -558,22 +668,25 @@ async def register(
         )
         row = cur.fetchone()
         conn.commit()
-        
+
         # Clear face cache to reload the newly registered face encoding
         from app.services.face_recognition.face_service import clear_face_cache
         clear_face_cache()
-        
+
         return JSONResponse({
             "message": "Face registered successfully",
             "personid": personid,
             "faceencodingid": row[0] if row else None,
         })
     except Exception as exc:
-        conn.rollback()
+        if conn is not None:
+            conn.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
-        cur.close()
-        conn.close()
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
 
 
 @app.get("/system-status")

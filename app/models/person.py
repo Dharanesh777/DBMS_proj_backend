@@ -26,3 +26,6 @@ class KnownPerson(Base):
         secondary="public.userknownperson",
         back_populates="known_persons",
     )
+
+    def __repr__(self) -> str:
+        return f"<KnownPerson personid={self.personid} name={self.name!r}>"

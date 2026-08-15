@@ -3,7 +3,7 @@ services/emotion_service.py — Business logic for EmotionRecord management
 """
 import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import Optional
 
 from app.models.emotion_record import EmotionRecord
@@ -59,48 +59,68 @@ class EmotionService:
         logger.info(f"Created emotion record {emotion.emotionid} for interaction {interaction_id}: {emotiontype}")
         return emotion
 
-    def get_emotion_record(self, emotion_id: int) -> Optional[EmotionRecord]:
-        """Get emotion record by ID"""
+    def get_emotion_record(self, emotion_id: int, user_id: int) -> Optional[EmotionRecord]:
+        """Get emotion record by ID, scoped to interactions owned by user_id."""
         return self.db.execute(
-            select(EmotionRecord).where(EmotionRecord.emotionid == emotion_id)
+            select(EmotionRecord)
+            .join(Conversation, EmotionRecord.interactionid == Conversation.interactionid)
+            .where(
+                EmotionRecord.emotionid == emotion_id,
+                Conversation.userid == user_id,
+            )
         ).scalar_one_or_none()
 
-    def get_emotions_for_interaction(self, interaction_id: int) -> list[EmotionRecord]:
-        """Get all emotion records for an interaction"""
+    def get_emotions_for_interaction(self, interaction_id: int, user_id: int) -> list[EmotionRecord]:
+        """Get all emotion records for an interaction, scoped to user_id."""
         return list(
             self.db.execute(
-                select(EmotionRecord).where(EmotionRecord.interactionid == interaction_id)
+                select(EmotionRecord)
+                .join(Conversation, EmotionRecord.interactionid == Conversation.interactionid)
+                .where(
+                    EmotionRecord.interactionid == interaction_id,
+                    Conversation.userid == user_id,
+                )
             ).scalars()
         )
 
-    def list_emotion_records(self, skip: int = 0, limit: int = 100) -> list[EmotionRecord]:
-        """List all emotion records with pagination"""
+    def list_emotion_records(self, user_id: int, skip: int = 0, limit: int = 100) -> list[EmotionRecord]:
+        """List emotion records for interactions owned by user_id, with pagination."""
         return list(
             self.db.execute(
-                select(EmotionRecord).offset(skip).limit(limit)
+                select(EmotionRecord)
+                .join(Conversation, EmotionRecord.interactionid == Conversation.interactionid)
+                .where(Conversation.userid == user_id)
+                .order_by(EmotionRecord.emotionid)
+                .offset(skip)
+                .limit(limit)
             ).scalars()
         )
 
-    def count_emotion_records(self) -> int:
-        """Count total emotion records"""
-        return self.db.query(EmotionRecord).count()
+    def count_emotion_records(self, user_id: int) -> int:
+        """Count emotion records for interactions owned by user_id."""
+        return self.db.execute(
+            select(func.count(EmotionRecord.emotionid))
+            .join(Conversation, EmotionRecord.interactionid == Conversation.interactionid)
+            .where(Conversation.userid == user_id)
+        ).scalar_one()
 
-    def delete_emotion_record(self, emotion_id: int) -> bool:
+    def delete_emotion_record(self, emotion_id: int, user_id: int) -> bool:
         """
-        Delete an emotion record.
-        
+        Delete an emotion record. Only permitted if it belongs to an interaction owned by user_id.
+
         Args:
             emotion_id: Emotion record ID to delete
-        
+            user_id: Caller's user ID
+
         Returns:
-            True if deleted, False if not found
+            True if deleted, False if not found for this user
         """
-        emotion = self.get_emotion_record(emotion_id)
+        emotion = self.get_emotion_record(emotion_id, user_id)
         if not emotion:
             return False
-        
+
         self.db.delete(emotion)
         self.db.commit()
-        
+
         logger.info(f"Deleted emotion record {emotion_id}")
         return True

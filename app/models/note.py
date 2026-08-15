@@ -14,7 +14,7 @@ class Note(Base):
 
     noteid: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     interactionid: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("public.conversation.interactionid")
+        Integer, ForeignKey("public.conversation.interactionid", ondelete="CASCADE"), index=True
     )
     content: Mapped[str | None] = mapped_column(Text)
     createdat: Mapped[datetime | None] = mapped_column(
@@ -22,3 +22,6 @@ class Note(Base):
     )
 
     conversation = relationship("Conversation", back_populates="notes")
+
+    def __repr__(self) -> str:
+        return f"<Note noteid={self.noteid} interactionid={self.interactionid}>"

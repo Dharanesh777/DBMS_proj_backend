@@ -18,10 +18,12 @@ class EmotionRecordCreate(EmotionRecordBase):
     confidencelevel: float = Field(..., ge=0.0, le=1.0)
 
 
-class EmotionRecordResponse(EmotionRecordBase):
-    """Schema for emotion record response"""
+class EmotionRecordResponse(BaseModel):
+    """Schema for emotion record response — a record always has both fields set at creation"""
     emotionid: int
     interactionid: int
+    emotiontype: str = Field(..., max_length=50)
+    confidencelevel: float = Field(..., ge=0.0, le=1.0)
 
     class Config:
         from_attributes = True

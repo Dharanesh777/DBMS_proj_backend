@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import CameraOverlay from './components/CameraOverlay';
+import { API_BASE } from './config';
 import './App.css';
 
-const REMINDERS_URL   = 'http://localhost:8004/get-reminders';
-const REGISTER_URL    = 'http://localhost:8004/register-new';
-const LIVE_LOG_URL    = 'http://localhost:8004/live-log';
-const SESSION_URL     = 'http://localhost:8004/session-status';
+const REMINDERS_URL   = `${API_BASE}/get-reminders`;
+const REGISTER_URL    = `${API_BASE}/register-new`;
+const LIVE_LOG_URL    = `${API_BASE}/live-log`;
+const SESSION_URL     = `${API_BASE}/session-status`;
+const PROVIDER_URL    = `${API_BASE}/config/provider`;
 
 function App() {
   // ── State ──────────────────────────────────────────────────────────────────
   const [reminders, setReminders]   = useState([]);
-  const [eventLog, setEventLog]     = useState([{ ts: '--:--:--', message: 'HUD Initialized — Scanning...' }]);
+  const [eventLog, setEventLog]     = useState([{ ts: '--:--:--', message: 'HUD Initialized — Scanning...', _key: 'init' }]);
   const [sessionInfo, setSessionInfo] = useState(null);   // current session data
 
   const [sysStatus, setSysStatus] = useState({
@@ -19,11 +21,16 @@ function App() {
     is_recording: false,
     is_summarizing: false,
     grace_countdown: 0,
+    session_duration: 0,
   });
 
   const [llmProvider, setLlmProvider] = useState(
     () => localStorage.getItem('llmProvider') || 'groq'
   );
+
+  // Tracks whether the last session-status poll succeeded — surfaced in the footer
+  // so a dead backend connection is visible instead of silently doing nothing.
+  const [connectionOk, setConnectionOk] = useState(true);
 
   // Registration modal (shown AFTER session ends for unknown persons)
   const [showModal, setShowModal]   = useState(false);
@@ -32,46 +39,99 @@ function App() {
   const [regStatus, setRegStatus]   = useState('');
   const pendingFrameRef = useRef(null);   // last frame blob captured during session
 
+  // Read inside the polling effect without needing showModal in its dependency
+  // array — otherwise toggling the modal tears down and recreates all three
+  // polling intervals, including the unrelated 30s reminders poll.
+  const showModalRef = useRef(showModal);
+  useEffect(() => { showModalRef.current = showModal; }, [showModal]);
+
+  // Reconcile the locally-cached LLM provider with actual server state once on
+  // mount — a stale localStorage value could otherwise silently diverge from
+  // what the backend is really using after a restart.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(PROVIDER_URL);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.provider && data.provider !== llmProvider) {
+            setLlmProvider(data.provider);
+            localStorage.setItem('llmProvider', data.provider);
+          }
+        }
+      } catch (_) {
+        // Non-fatal — keep the cached value if the backend isn't reachable yet.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Polling ─────────────────────────────────────────────────────────────────
   useEffect(() => {
+    let remindersAbort = null;
+    let liveLogAbort = null;
+    let sessionAbort = null;
+
     const fetchReminders = async () => {
+      remindersAbort?.abort();
+      remindersAbort = new AbortController();
       try {
-        const res = await fetch(REMINDERS_URL);
+        const res = await fetch(REMINDERS_URL, { signal: remindersAbort.signal });
         if (res.ok) {
           const data = await res.json();
           if (data.length > 0) setReminders(data.map(r => ({ id: r.id, text: r.summary })));
         }
-      } catch (_) {}
+      } catch (e) {
+        if (e.name !== 'AbortError') console.warn('Reminders poll failed:', e.message);
+      }
     };
 
     const fetchLiveLog = async () => {
+      liveLogAbort?.abort();
+      liveLogAbort = new AbortController();
       try {
-        const res = await fetch(LIVE_LOG_URL);
+        const res = await fetch(LIVE_LOG_URL, { signal: liveLogAbort.signal });
         if (res.ok) {
           const data = await res.json();
           if (data.logs && data.logs.length > 0) {
-            setEventLog(data.logs.slice(-20).reverse());
+            const recent = data.logs.slice(-20).reverse();
+            setEventLog(recent.map((entry, idx) => ({
+              ...entry,
+              _key: `${entry.ts}-${idx}-${entry.message.slice(0, 24)}`,
+            })));
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        if (e.name !== 'AbortError') console.warn('Live log poll failed:', e.message);
+      }
     };
 
     const fetchSession = async () => {
+      sessionAbort?.abort();
+      sessionAbort = new AbortController();
       try {
-        const res = await fetch(SESSION_URL);
+        const res = await fetch(SESSION_URL, { signal: sessionAbort.signal });
         if (res.ok) {
           const data = await res.json();
           setSysStatus(data);
+          setConnectionOk(true);
 
           // If session just ended and needs registration, trigger modal
-          if (data.state === 'idle' && data.needs_registration && !showModal) {
+          if (data.state === 'idle' && data.needs_registration && !showModalRef.current) {
             setShowModal(true);
             setRegName('');
             setRegRelation('');
             setRegStatus('');
           }
+        } else {
+          setConnectionOk(false);
         }
-      } catch (_) {}
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          console.warn('Session poll failed:', e.message);
+          setConnectionOk(false);
+        }
+      }
     };
 
     fetchReminders();
@@ -81,8 +141,11 @@ function App() {
     const rid  = setInterval(fetchReminders, 30000);
     const lid  = setInterval(fetchLiveLog, 800);
     const sid  = setInterval(fetchSession, 400);
-    return () => { clearInterval(rid); clearInterval(lid); clearInterval(sid); };
-  }, [showModal]);
+    return () => {
+      clearInterval(rid); clearInterval(lid); clearInterval(sid);
+      remindersAbort?.abort(); liveLogAbort?.abort(); sessionAbort?.abort();
+    };
+  }, []);
 
   // ── Session event callback from CameraOverlay ────────────────────────────
   const handleSessionEvent = useCallback((event) => {
@@ -114,14 +177,23 @@ function App() {
       formData.append('name', regName.trim());
       formData.append('relationship', regRelation.trim());
 
-      const res  = await fetch(REGISTER_URL, { method: 'POST', body: formData });
-      const data = await res.json();
+      const res = await fetch(REGISTER_URL, { method: 'POST', body: formData });
 
-      if (res.ok) {
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        // Server returned a non-JSON body (e.g. an HTML error page) — fall through
+        // to the generic status-based message below instead of throwing here.
+      }
+
+      if (res.ok && data) {
         setRegStatus(`✅ ${data.message}`);
         setTimeout(() => setShowModal(false), 1500);
-      } else {
+      } else if (data) {
         setRegStatus(`❌ ${data.detail || 'Registration failed.'}`);
+      } else {
+        setRegStatus(`❌ Registration failed (server returned ${res.status}).`);
       }
     } catch (e) {
       setRegStatus(`❌ Network error: ${e.message}`);
@@ -148,7 +220,7 @@ function App() {
         <div className="hud-title">SYSTEM LOG</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto' }}>
           {eventLog.map((entry, i) => (
-            <div key={i} style={{ fontSize: 11, color: i === 0 ? '#e6edf3' : '#6e7681', fontFamily: 'monospace', lineHeight: 1.4 }}>
+            <div key={entry._key ?? `${entry.ts}-${i}`} style={{ fontSize: 11, color: i === 0 ? '#e6edf3' : '#6e7681', fontFamily: 'monospace', lineHeight: 1.4 }}>
               <span style={{ color: '#3fb950', marginRight: 6 }}>{entry.ts}</span>
               {entry.message}
             </div>
@@ -193,6 +265,9 @@ function App() {
         {sysStatus.state === 'session_active' && sysStatus.session_duration > 0 && (
           <span style={{ color: '#8b949e' }}>Session: {sysStatus.session_duration}s</span>
         )}
+        {!connectionOk && (
+          <span style={{ color: '#ff4444', fontWeight: 600 }}>⚠️ Backend unreachable</span>
+        )}
       </div>
 {/* ── LLM PROVIDER SWITCHER ── */}
 <div style={{
@@ -211,7 +286,7 @@ function App() {
       key={p}
       onClick={async () => {
         try {
-          const res = await fetch('http://localhost:8004/config/provider', {
+          const res = await fetch(PROVIDER_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: p })

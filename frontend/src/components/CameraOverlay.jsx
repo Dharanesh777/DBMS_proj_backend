@@ -1,14 +1,25 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import Webcam from 'react-webcam';
+import { API_BASE } from '../config';
 
-const FACE_API_URL    = 'http://localhost:8004/identify';
+const FACE_API_URL    = `${API_BASE}/identify`;
+const IDLE_AUDIO_URL  = `${API_BASE}/idle-audio`;
 const SCAN_INTERVAL   = 1500;   // Poll interval while idle (ms)
 const SESSION_POLL_MS = 500;    // Fast poll interval during active session (ms)
+const IDLE_AUDIO_CHUNK_MS = 10000; // length of each idle-state audio chunk sent to the server
+const MAX_CONSECUTIVE_FAILURES_LOGGED = 5; // stop spamming the console after this many
 
 const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
   const webcamRef    = useRef(null);
+  const canvasRef    = useRef(null);   // reused across captureBlob() calls instead of allocating a new one every poll
   const intervalRef  = useRef(null);
-  const sessionRef   = useRef({ state: 'idle' });
+  const abortRef     = useRef(null);
+  const failureCountRef = useRef(0);
+
+  // Actual reactive session state — sessionRef alone (read but never causing a
+  // re-render) meant the polling interval below never restarted on transitions
+  // between idle and active, since its effect only depended on `poll`'s identity.
+  const [sessionState, setSessionState] = useState('idle');
 
   const [overlay, setOverlay] = useState({
     label: '🔍 Scanning...',
@@ -17,11 +28,14 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
     countdown: 0,
   });
 
+  const [cameraError, setCameraError] = useState(null);
+
   const captureBlob = useCallback(() => {
     const webcam = webcamRef.current;
     if (!webcam || !webcam.video || webcam.video.readyState !== 4) return null;
-    const canvas = document.createElement('canvas');
-    const video  = webcam.video;
+    const video = webcam.video;
+    if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
+    const canvas = canvasRef.current;
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
@@ -35,13 +49,18 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
     const formData = new FormData();
     formData.append('file', blob, 'frame.jpg');
 
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const res  = await fetch(FACE_API_URL, { method: 'POST', body: formData });
+      const res  = await fetch(FACE_API_URL, { method: 'POST', body: formData, signal: controller.signal });
       if (!res.ok) return;
       const data = await res.json();
+      failureCountRef.current = 0;
 
       const state = data.session_state ?? 'idle';
-      sessionRef.current = { state };
+      setSessionState(state);
 
       // ── Grace period ────────────────────────────────────────────────
       if (state === 'grace_period') {
@@ -103,17 +122,110 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
         }
       }
     } catch (err) {
-      // Silently ignore network errors
+      if (err.name === 'AbortError') return;
+      failureCountRef.current += 1;
+      if (failureCountRef.current <= MAX_CONSECUTIVE_FAILURES_LOGGED) {
+        console.warn(`Camera identify poll failed (${failureCountRef.current}):`, err.message);
+      }
     }
   }, [captureBlob, onSessionEvent]);
 
-  // Restart polling interval on state changes
+  // Restart the polling interval whenever the session actually transitions between
+  // idle and active — previously this only re-ran when poll's identity changed,
+  // reading session state from a ref instead of reactive state, so the interval
+  // could lag a full cycle behind the real transition.
   useEffect(() => {
-    const interval = sessionRef.current.state === 'idle' ? SCAN_INTERVAL : SESSION_POLL_MS;
+    const interval = sessionState === 'idle' ? SCAN_INTERVAL : SESSION_POLL_MS;
     clearInterval(intervalRef.current);
     intervalRef.current = setInterval(poll, interval);
     return () => clearInterval(intervalRef.current);
-  }, [poll]);
+  }, [poll, sessionState]);
+
+  // Stop the webcam's media stream tracks explicitly on unmount — react-webcam's
+  // own cleanup isn't guaranteed to release the camera immediately otherwise.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      const stream = webcamRef.current?.video?.srcObject;
+      stream?.getTracks?.().forEach((track) => track.stop());
+    };
+  }, []);
+
+  // ── Idle-state client-mic audio capture ──────────────────────────────────
+  // Replaces the old server-side mic recording (which captured the HOST
+  // machine's own mic, not the caller's). Records fixed-length chunks from
+  // the CLIENT's microphone only while sessionState is 'idle', and posts each
+  // one to /idle-audio for transcription. Stops immediately once a session
+  // starts, via this effect's cleanup running when sessionState changes.
+  useEffect(() => {
+    if (sessionState !== 'idle') return undefined;
+    if (typeof MediaRecorder === 'undefined') return undefined;
+
+    let cancelled = false;
+    let stream = null;
+    let currentRecorder = null;
+    let nextChunkTimer = null;
+
+    const recordAndSendChunk = async () => {
+      if (cancelled) return;
+
+      if (!stream) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          console.warn('Idle audio: microphone access failed, giving up:', err.message);
+          return;
+        }
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+      }
+
+      const chunks = [];
+      let recorder;
+      try {
+        recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      } catch (err) {
+        console.warn('Idle audio: MediaRecorder unavailable:', err.message);
+        return;
+      }
+      currentRecorder = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => {
+        if (chunks.length > 0) {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const formData = new FormData();
+          formData.append('file', blob, 'idle_chunk.webm');
+          fetch(IDLE_AUDIO_URL, { method: 'POST', body: formData }).catch((err) => {
+            console.warn('Idle audio upload failed:', err.message);
+          });
+        }
+        if (!cancelled) {
+          nextChunkTimer = setTimeout(recordAndSendChunk, 0);
+        }
+      };
+
+      recorder.start();
+      nextChunkTimer = setTimeout(() => {
+        if (!cancelled && recorder.state !== 'inactive') recorder.stop();
+      }, IDLE_AUDIO_CHUNK_MS);
+    };
+
+    recordAndSendChunk();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(nextChunkTimer);
+      if (currentRecorder && currentRecorder.state !== 'inactive') {
+        currentRecorder.stop();
+      }
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [sessionState]);
 
   return (
     <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', overflow: 'hidden', background: 'black' }}>
@@ -122,7 +234,24 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
         muted={true}
         style={{ width: '100vw', height: '100vh', objectFit: 'cover' }}
         screenshotFormat="image/jpeg"
+        onUserMediaError={(err) => {
+          console.error('Webcam access failed:', err);
+          setCameraError(
+            err?.name === 'NotAllowedError'
+              ? 'Camera permission denied — allow camera access and reload.'
+              : 'Camera unavailable — check that it is connected and not in use elsewhere.'
+          );
+        }}
       />
+      {cameraError && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          background: 'rgba(0,0,0,0.85)', color: '#ff6b6b', padding: '16px 24px',
+          borderRadius: 8, fontFamily: 'monospace', fontSize: 14, textAlign: 'center', maxWidth: 360,
+        }}>
+          ⚠️ {cameraError}
+        </div>
+      )}
 
       {/* Scanning reticle overlay */}
       <div style={{

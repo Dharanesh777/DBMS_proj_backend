@@ -1,376 +1,197 @@
 """
-test_api.py - Comprehensive API testing script
-Tests all endpoints and verifies database operations
+tests/test_api.py — Integration tests against a running app.app:app server
+(start it with `python server.py`, or `uvicorn app.app:app --port 8000`).
+
+Previously a standalone script (`python test_api.py`) with a hand-rolled
+main() threading IDs through positional function args. Running it under
+pytest broke, because pytest interprets a test function's parameters as
+requested fixture names — `def test_caregiver_management(user_id):` looked
+like a request for a fixture literally named `user_id`, which didn't exist.
+Rewritten as real pytest fixtures below so `pytest tests/test_api.py` works.
+
+All tests here are skipped automatically if no server is reachable at
+BASE_URL, rather than failing with a confusing connection error.
+
+Note: person creation has no HTTP endpoint on this server — /api/persons/*
+was removed as a dead, unused-by-the-frontend duplicate of the live
+face-recognition module (see TECH_DEBT.md and the git history for the
+removal). The person_id fixture below inserts directly via SQLAlchemy instead.
 """
+import pytest
 import requests
-import json
 from datetime import datetime
+
+from app.db.session import create_session
+from app.models.person import KnownPerson
+from app.models.junction_tables import userknownperson
 
 BASE_URL = "http://localhost:8000"
 
-def print_test(test_name, success, response=None):
-    """Print test result"""
-    status = "✅ PASS" if success else "❌ FAIL"
-    print(f"{status} - {test_name}")
-    if not success and response:
-        print(f"   Error: {response.text if hasattr(response, 'text') else response}")
-    print()
 
-def test_health_check():
-    """Test health check endpoint"""
-    print("=" * 60)
-    print("1. TESTING HEALTH CHECK")
-    print("=" * 60)
-    
+def _server_reachable() -> bool:
     try:
-        response = requests.get(f"{BASE_URL}/health")
-        success = response.status_code == 200
-        print_test("GET /health", success, response)
-        if success:
-            print(f"   Response: {response.json()}")
-        return success
-    except Exception as e:
-        print_test("GET /health", False, str(e))
+        return requests.get(f"{BASE_URL}/health", timeout=2).status_code == 200
+    except requests.exceptions.RequestException:
         return False
 
-def test_user_management():
-    """Test user CRUD operations"""
-    print("=" * 60)
-    print("2. TESTING USER MANAGEMENT")
-    print("=" * 60)
-    
-    # Create user
+
+pytestmark = pytest.mark.skipif(
+    not _server_reachable(),
+    reason=f"No server reachable at {BASE_URL} — start it with `python server.py` first.",
+)
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def user_id():
     user_data = {
         "name": "Test User",
         "email": f"test_{datetime.now().timestamp()}@example.com",
         "age": 65,
         "medicalcondition": "Short-term memory loss",
-        "emergencycontact": "+1234567890"
+        "emergencycontact": "+1234567890",
     }
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/users/", json=user_data)
-        success = response.status_code == 201
-        print_test("POST /api/users/ (Create)", success, response)
-        
-        if not success:
-            return None
-        
-        user = response.json()
-        user_id = user["userid"]
-        print(f"   Created user ID: {user_id}")
-        
-        # Get user
-        response = requests.get(f"{BASE_URL}/api/users/{user_id}")
-        success = response.status_code == 200
-        print_test(f"GET /api/users/{user_id} (Read)", success, response)
-        
-        # List users
-        response = requests.get(f"{BASE_URL}/api/users/?skip=0&limit=10")
-        success = response.status_code == 200
-        print_test("GET /api/users/ (List)", success, response)
-        if success:
-            print(f"   Total users: {response.json()['total']}")
-        
-        # Update user
-        update_data = {"age": 66}
-        response = requests.put(f"{BASE_URL}/api/users/{user_id}", json=update_data)
-        success = response.status_code == 200
-        print_test(f"PUT /api/users/{user_id} (Update)", success, response)
-        
-        return user_id
-        
-    except Exception as e:
-        print_test("User Management", False, str(e))
-        return None
+    response = requests.post(f"{BASE_URL}/api/users/", json=user_data)
+    assert response.status_code == 201, response.text
+    uid = response.json()["userid"]
+    yield uid
+    requests.delete(f"{BASE_URL}/api/users/{uid}")
 
-def test_caregiver_management(user_id):
-    """Test caregiver CRUD operations"""
-    print("=" * 60)
-    print("3. TESTING CAREGIVER MANAGEMENT")
-    print("=" * 60)
-    
-    # Create caregiver
-    caregiver_data = {
-        "name": "Test Caregiver",
-        "relationshiptouser": "daughter",
-        "accesslevel": "admin"
-    }
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/caregivers/", json=caregiver_data)
-        success = response.status_code == 201
-        print_test("POST /api/caregivers/ (Create)", success, response)
-        
-        if not success:
-            return None
-        
-        caregiver = response.json()
-        caregiver_id = caregiver["caregiverid"]
-        print(f"   Created caregiver ID: {caregiver_id}")
-        
-        # Get caregiver
-        response = requests.get(f"{BASE_URL}/api/caregivers/{caregiver_id}")
-        success = response.status_code == 200
-        print_test(f"GET /api/caregivers/{caregiver_id} (Read)", success, response)
-        
-        # List caregivers
-        response = requests.get(f"{BASE_URL}/api/caregivers/?skip=0&limit=10")
-        success = response.status_code == 200
-        print_test("GET /api/caregivers/ (List)", success, response)
-        if success:
-            print(f"   Total caregivers: {response.json()['total']}")
-        
-        # Assign caregiver to user
-        if user_id:
-            assign_data = {"user_id": user_id, "caregiver_id": caregiver_id}
-            response = requests.post(f"{BASE_URL}/api/caregivers/assign", json=assign_data)
-            success = response.status_code == 200
-            print_test("POST /api/caregivers/assign (Assign)", success, response)
-            
-            # Get user's caregivers
-            response = requests.get(f"{BASE_URL}/api/users/{user_id}/caregivers")
-            success = response.status_code == 200
-            print_test(f"GET /api/users/{user_id}/caregivers", success, response)
-            if success:
-                print(f"   User has {len(response.json())} caregiver(s)")
-        
-        return caregiver_id
-        
-    except Exception as e:
-        print_test("Caregiver Management", False, str(e))
-        return None
 
-def test_person_management(user_id):
-    """Test person registration"""
-    print("=" * 60)
-    print("4. TESTING PERSON MANAGEMENT")
-    print("=" * 60)
-    
-    # Register person with dummy encoding
-    person_data = {
-        "user_id": user_id,
-        "name": "Test Person",
-        "relationship_type": "colleague",
-        "priority_level": 3,
-        "encoding": [0.1] * 128,  # Dummy 128-dimensional encoding
-        "confidence_score": 0.95
-    }
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/persons/register", json=person_data)
-        success = response.status_code == 201
-        print_test("POST /api/persons/register", success, response)
-        
-        if not success:
-            return None
-        
-        person = response.json()
-        person_id = person["person_id"]
-        print(f"   Registered person ID: {person_id}")
-        
-        # Identify person (should match)
-        identify_data = {
-            "user_id": user_id,
-            "encoding": [0.1] * 128  # Same encoding
-        }
-        response = requests.post(f"{BASE_URL}/api/persons/identify", json=identify_data)
-        success = response.status_code == 200
-        print_test("POST /api/persons/identify", success, response)
-        if success:
-            result = response.json()
-            print(f"   Identified: {result.get('name')} (confidence: {result.get('confidence')})")
-        
-        return person_id
-        
-    except Exception as e:
-        print_test("Person Management", False, str(e))
-        return None
+@pytest.fixture(scope="module")
+def caregiver_id(user_id):
+    caregiver_data = {"name": "Test Caregiver", "relationshiptouser": "daughter", "accesslevel": "admin"}
+    response = requests.post(f"{BASE_URL}/api/caregivers/", json=caregiver_data)
+    assert response.status_code == 201, response.text
+    cid = response.json()["caregiverid"]
 
-def test_interaction_flow(user_id, person_id):
-    """Test interaction start/end flow"""
-    print("=" * 60)
-    print("5. TESTING INTERACTION FLOW")
-    print("=" * 60)
-    
-    # Start interaction
-    interaction_data = {
-        "user_id": user_id,
-        "person_id": person_id,
-        "location": "Living Room"
-    }
-    
-    try:
-        response = requests.post(f"{BASE_URL}/api/interactions/start", json=interaction_data)
-        success = response.status_code == 201
-        print_test("POST /api/interactions/start", success, response)
-        
-        if not success:
-            return None
-        
-        interaction = response.json()
-        interaction_id = interaction["interaction_id"]
-        print(f"   Started interaction ID: {interaction_id}")
-        
-        # Append transcript
-        transcript_data = {
-            "interaction_id": interaction_id,
-            "transcript_chunk": "Hello, how are you today?"
-        }
-        response = requests.post(f"{BASE_URL}/api/sessions/append", json=transcript_data)
-        success = response.status_code == 200
-        print_test("POST /api/sessions/append", success, response)
-        
-        return interaction_id
-        
-    except Exception as e:
-        print_test("Interaction Flow", False, str(e))
-        return None
+    assign = requests.post(
+        f"{BASE_URL}/api/caregivers/assign",
+        json={"user_id": user_id, "caregiver_id": cid},
+    )
+    assert assign.status_code == 200, assign.text
 
-def test_emotion_records(interaction_id):
-    """Test emotion record creation"""
-    print("=" * 60)
-    print("6. TESTING EMOTION RECORDS")
-    print("=" * 60)
-    
-    # Create emotion record
-    emotion_data = {
-        "interaction_id": interaction_id,
-        "emotiontype": "happy",
-        "confidencelevel": 0.85
-    }
-    
+    yield cid
+    requests.delete(f"{BASE_URL}/api/caregivers/{cid}?user_id={user_id}")
+
+
+@pytest.fixture(scope="module")
+def person_id(user_id):
+    """No HTTP endpoint creates a person anymore — see module docstring."""
+    db = create_session()
     try:
-        response = requests.post(f"{BASE_URL}/api/emotions/", json=emotion_data)
-        success = response.status_code == 201
-        print_test("POST /api/emotions/ (Create)", success, response)
-        
-        if not success:
-            return None
-        
-        emotion = response.json()
-        emotion_id = emotion["emotionid"]
-        print(f"   Created emotion ID: {emotion_id}")
-        
-        # Get emotion
-        response = requests.get(f"{BASE_URL}/api/emotions/{emotion_id}")
-        success = response.status_code == 200
-        print_test(f"GET /api/emotions/{emotion_id} (Read)", success, response)
-        
-        # Get emotions for interaction
-        response = requests.get(f"{BASE_URL}/api/emotions/interaction/{interaction_id}")
-        success = response.status_code == 200
-        print_test(f"GET /api/emotions/interaction/{interaction_id}", success, response)
-        if success:
-            print(f"   Interaction has {len(response.json())} emotion(s)")
-        
-        # List emotions
-        response = requests.get(f"{BASE_URL}/api/emotions/?skip=0&limit=10")
-        success = response.status_code == 200
-        print_test("GET /api/emotions/ (List)", success, response)
-        
-        return emotion_id
-        
-    except Exception as e:
-        print_test("Emotion Records", False, str(e))
-        return None
+        person = KnownPerson(name="Test Person", relationshiptype="colleague", prioritylevel=3)
+        db.add(person)
+        db.flush()
+        db.execute(userknownperson.insert().values(userid=user_id, personid=person.personid))
+        db.commit()
+        pid = person.personid
+    finally:
+        db.close()
+
+    yield pid
+
+    db = create_session()
+    try:
+        p = db.get(KnownPerson, pid)
+        if p:
+            db.delete(p)
+            db.commit()
+    finally:
+        db.close()
+
+
+@pytest.fixture(scope="module")
+def interaction_id(user_id, person_id):
+    response = requests.post(
+        f"{BASE_URL}/api/interactions/start",
+        json={"user_id": user_id, "person_id": person_id, "location": "Living Room"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["interaction_id"]
+
+
+@pytest.fixture(scope="module")
+def emotion_id(interaction_id):
+    response = requests.post(
+        f"{BASE_URL}/api/emotions/",
+        json={"interaction_id": interaction_id, "emotiontype": "happy", "confidencelevel": 0.85},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["emotionid"]
+
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+def test_health_check():
+    response = requests.get(f"{BASE_URL}/health")
+    assert response.status_code == 200
+
+
+def test_read_user(user_id):
+    response = requests.get(f"{BASE_URL}/api/users/{user_id}")
+    assert response.status_code == 200
+    assert response.json()["userid"] == user_id
+
+
+def test_list_users():
+    response = requests.get(f"{BASE_URL}/api/users/?skip=0&limit=10")
+    assert response.status_code == 200
+    assert "total" in response.json()
+
+
+def test_update_user(user_id):
+    response = requests.put(f"{BASE_URL}/api/users/{user_id}", json={"age": 66})
+    assert response.status_code == 200
+    assert response.json()["age"] == 66
+
+
+def test_read_caregiver(caregiver_id, user_id):
+    response = requests.get(f"{BASE_URL}/api/caregivers/{caregiver_id}?user_id={user_id}")
+    assert response.status_code == 200
+
+
+def test_list_caregivers(user_id):
+    response = requests.get(f"{BASE_URL}/api/caregivers/?user_id={user_id}&skip=0&limit=10")
+    assert response.status_code == 200
+    assert "total" in response.json()
+
+
+def test_user_has_caregiver(user_id, caregiver_id):
+    response = requests.get(f"{BASE_URL}/api/users/{user_id}/caregivers")
+    assert response.status_code == 200
+    ids = [c["caregiverid"] for c in response.json()]
+    assert caregiver_id in ids
+
+
+def test_interaction_append_transcript(interaction_id):
+    response = requests.post(
+        f"{BASE_URL}/api/sessions/append",
+        json={"interaction_id": interaction_id, "transcript_chunk": "Hello, how are you today?"},
+    )
+    assert response.status_code == 200
+
+
+def test_emotion_record_read(emotion_id, user_id):
+    response = requests.get(f"{BASE_URL}/api/emotions/{emotion_id}?user_id={user_id}")
+    assert response.status_code == 200
+
+
+def test_emotions_for_interaction(interaction_id, emotion_id, user_id):
+    response = requests.get(f"{BASE_URL}/api/emotions/interaction/{interaction_id}?user_id={user_id}")
+    assert response.status_code == 200
+    ids = [e["emotionid"] for e in response.json()]
+    assert emotion_id in ids
+
+
+def test_list_emotions(user_id):
+    response = requests.get(f"{BASE_URL}/api/emotions/?user_id={user_id}&skip=0&limit=10")
+    assert response.status_code == 200
+    assert "total" in response.json()
+
 
 def test_memory_retrieval(person_id, user_id):
-    """Test memory retrieval"""
-    print("=" * 60)
-    print("7. TESTING MEMORY RETRIEVAL")
-    print("=" * 60)
-    
-    try:
-        response = requests.get(f"{BASE_URL}/api/memory/{person_id}?user_id={user_id}")
-        success = response.status_code == 200
-        print_test(f"GET /api/memory/{person_id}", success, response)
-        if success:
-            memories = response.json()
-            print(f"   Retrieved {len(memories.get('summaries', []))} memory/memories")
-        
-        return success
-        
-    except Exception as e:
-        print_test("Memory Retrieval", False, str(e))
-        return False
-
-def test_cleanup(user_id, caregiver_id):
-    """Clean up test data"""
-    print("=" * 60)
-    print("8. CLEANUP TEST DATA")
-    print("=" * 60)
-    
-    try:
-        # Delete user (cascades to interactions, etc.)
-        if user_id:
-            response = requests.delete(f"{BASE_URL}/api/users/{user_id}")
-            success = response.status_code == 204
-            print_test(f"DELETE /api/users/{user_id}", success, response)
-        
-        # Delete caregiver
-        if caregiver_id:
-            response = requests.delete(f"{BASE_URL}/api/caregivers/{caregiver_id}")
-            success = response.status_code == 204
-            print_test(f"DELETE /api/caregivers/{caregiver_id}", success, response)
-        
-        return True
-        
-    except Exception as e:
-        print_test("Cleanup", False, str(e))
-        return False
-
-def main():
-    """Run all tests"""
-    print("\n" + "=" * 60)
-    print("COGNITIVE MEMORY ASSISTANT - API TEST SUITE")
-    print("=" * 60)
-    print(f"Testing against: {BASE_URL}")
-    print("=" * 60 + "\n")
-    
-    # Test health check
-    if not test_health_check():
-        print("\n❌ Server is not running or not healthy!")
-        print("Please start the server with: cd backend && python run.py")
-        return
-    
-    # Test user management
-    user_id = test_user_management()
-    if not user_id:
-        print("\n❌ User management tests failed!")
-        return
-    
-    # Test caregiver management
-    caregiver_id = test_caregiver_management(user_id)
-    
-    # Test person management
-    person_id = test_person_management(user_id)
-    if not person_id:
-        print("\n❌ Person management tests failed!")
-        test_cleanup(user_id, caregiver_id)
-        return
-    
-    # Test interaction flow
-    interaction_id = test_interaction_flow(user_id, person_id)
-    if not interaction_id:
-        print("\n❌ Interaction flow tests failed!")
-        test_cleanup(user_id, caregiver_id)
-        return
-    
-    # Test emotion records
-    test_emotion_records(interaction_id)
-    
-    # Test memory retrieval
-    test_memory_retrieval(person_id, user_id)
-    
-    # Cleanup
-    test_cleanup(user_id, caregiver_id)
-    
-    print("\n" + "=" * 60)
-    print("✅ ALL TESTS COMPLETED!")
-    print("=" * 60)
-    print("\nCheck the results above for any failures.")
-    print("All data has been cleaned up from the database.\n")
-
-if __name__ == "__main__":
-    main()
+    response = requests.get(f"{BASE_URL}/api/memory/{person_id}?user_id={user_id}")
+    assert response.status_code == 200
+    assert response.json()["person_id"] == person_id

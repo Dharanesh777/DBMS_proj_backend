@@ -31,3 +31,12 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def create_session() -> Session:
+    """Create a standalone Session for code that runs outside a FastAPI request
+    (e.g. Celery task bodies). Caller is responsible for closing it —
+    do NOT reuse a request-scoped Session (from get_db()) after the request ends,
+    it will already be closed by then."""
+    factory = _get_session_factory()
+    return factory()

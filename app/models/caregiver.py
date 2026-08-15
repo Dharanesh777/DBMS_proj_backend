@@ -21,3 +21,6 @@ class Caregiver(Base):
         secondary="public.usercaregiver",
         back_populates="caregivers",
     )
+
+    def __repr__(self) -> str:
+        return f"<Caregiver caregiverid={self.caregiverid} name={self.name!r}>"

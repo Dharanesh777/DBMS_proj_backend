@@ -53,63 +53,67 @@ def create_emotion_record(
 @router.get("/{emotion_id}", response_model=EmotionRecordResponse)
 def get_emotion_record(
     emotion_id: int,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — record must belong to this user's interaction"),
     db: Session = Depends(get_db),
 ):
     """
-    Get emotion record by ID.
+    Get emotion record by ID. Only returns the record if it belongs to an interaction owned by user_id.
     """
     service = EmotionService(db)
-    emotion = service.get_emotion_record(emotion_id)
-    
+    emotion = service.get_emotion_record(emotion_id, user_id)
+
     if not emotion:
         raise HTTPException(status_code=404, detail=f"Emotion record {emotion_id} not found")
-    
+
     return emotion
 
 
 @router.get("/interaction/{interaction_id}", response_model=list[EmotionRecordResponse])
 def get_emotions_for_interaction(
     interaction_id: int,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — interaction must belong to this user"),
     db: Session = Depends(get_db),
 ):
     """
-    Get all emotion records for a specific interaction.
-    
+    Get all emotion records for a specific interaction owned by user_id.
+
     Useful for analyzing emotional patterns during a conversation.
     """
     service = EmotionService(db)
-    emotions = service.get_emotions_for_interaction(interaction_id)
+    emotions = service.get_emotions_for_interaction(interaction_id, user_id)
     return emotions
 
 
 @router.get("/", response_model=EmotionRecordListResponse)
 def list_emotion_records(
+    user_id: int = Query(..., gt=0, description="Caller's user ID"),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of records to return"),
     db: Session = Depends(get_db),
 ):
     """
-    List all emotion records with pagination.
+    List emotion records for interactions owned by user_id, with pagination.
     """
     service = EmotionService(db)
-    emotions = service.list_emotion_records(skip=skip, limit=limit)
-    total = service.count_emotion_records()
-    
+    emotions = service.list_emotion_records(user_id, skip=skip, limit=limit)
+    total = service.count_emotion_records(user_id)
+
     return EmotionRecordListResponse(emotions=emotions, total=total)
 
 
 @router.delete("/{emotion_id}", status_code=204)
 def delete_emotion_record(
     emotion_id: int,
+    user_id: int = Query(..., gt=0, description="Caller's user ID — record must belong to this user's interaction"),
     db: Session = Depends(get_db),
 ):
     """
-    Delete an emotion record.
+    Delete an emotion record. Only permitted if it belongs to an interaction owned by user_id.
     """
     service = EmotionService(db)
-    deleted = service.delete_emotion_record(emotion_id)
-    
+    deleted = service.delete_emotion_record(emotion_id, user_id)
+
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Emotion record {emotion_id} not found")
-    
+
     return None

@@ -21,6 +21,13 @@ yolov8n.pt
 *.jpg
 *.jpeg
 
+# Runtime-recorded audio (session capture output, not source)
+*.wav
+uploads/
+
 # Secrets
-*.json
+token.json
+credentials.json
+app/services/reminder_app/token.json
+app/services/reminder_app/credentials.json
 .env

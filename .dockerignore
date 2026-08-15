@@ -1,0 +1,41 @@
+# Secrets — never bake into an image layer
+.env
+.env.local
+token.json
+credentials.json
+
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+ENV/
+*.egg-info/
+
+# Recorded audio samples / debug scripts — not needed at runtime
+*.wav
+debug_db.py
+register_face.py
+test_*.py
+tests/
+
+# Unused legacy model files (res10/deploy.prototxt — not referenced by app/)
+res10_300x300_ssd_iter_140000.caffemodel
+deploy.prototxt
+
+# Frontend — built/deployed separately, not part of this backend image
+frontend/
+node_modules/
+
+# Docs, editor/IDE noise
+docs/
+.vscode/
+*.md
+
+# Backend duplicate (pending its own cleanup, never needed in the image)
+backend/
