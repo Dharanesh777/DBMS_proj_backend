@@ -57,7 +57,7 @@ curl -X POST http://localhost:5000/api/audio/upload \
 
 **New (FastAPI)**:
 ```bash
-curl -X POST http://localhost:8000/api/audio/transcribe \
+curl -X POST http://localhost:8004/api/audio/transcribe \
   -F "audio=@recording.wav" \
   -F "interaction_id=123"
 ```
@@ -79,7 +79,7 @@ curl -X POST http://localhost:5000/api/audio/record_from_mic \
 
 **New (FastAPI)**:
 ```bash
-curl -X POST http://localhost:8000/api/audio/record \
+curl -X POST http://localhost:8004/api/audio/record \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "person_id": 42, "duration_seconds": 10}'
 ```
@@ -176,12 +176,12 @@ python run.py
 
 ```bash
 # Start interaction first
-curl -X POST http://localhost:8000/api/interactions/start \
+curl -X POST http://localhost:8004/api/interactions/start \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "person_id": 1, "location": "Test"}'
 
 # Note the interaction_id from response, then:
-curl -X POST http://localhost:8000/api/audio/transcribe \
+curl -X POST http://localhost:8004/api/audio/transcribe \
   -F "audio=@test.wav" \
   -F "interaction_id=1"
 ```
@@ -189,7 +189,7 @@ curl -X POST http://localhost:8000/api/audio/transcribe \
 ### 2. Test Microphone Recording
 
 ```bash
-curl -X POST http://localhost:8000/api/audio/record \
+curl -X POST http://localhost:8004/api/audio/record \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "person_id": 1, "duration_seconds": 5}'
 ```
@@ -198,7 +198,7 @@ curl -X POST http://localhost:8000/api/audio/record \
 
 ```bash
 # Check session has transcript
-curl "http://localhost:8000/api/memory/1?user_id=1"
+curl "http://localhost:8004/api/memory/1?user_id=1"
 ```
 
 ## Troubleshooting
@@ -246,7 +246,7 @@ pip install -r requirements.txt
 For migration questions:
 - Check API Contracts: `docs/API_CONTRACTS.md`
 - Check Backend README: `docs/BACKEND_README.md`
-- Check Swagger UI: http://localhost:8000/docs
+- Check Swagger UI: http://localhost:8004/docs
 
 ---
 

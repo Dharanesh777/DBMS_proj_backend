@@ -275,15 +275,19 @@
 
 ## 🐛 Known Limitations
 
-1. **APScheduler In-Memory Job Store**
-   - Jobs lost on restart
-   - Single-instance only (no horizontal scaling)
-   - Acceptable for V1, needs Redis/PostgreSQL job store for production
+1. **~~APScheduler In-Memory Job Store~~ — resolved**
+   - Migrated to Celery + Redis (see `session_service.py`'s module docstring)
+     — timers now survive a web-process restart. Still single-instance
+     (no horizontal scaling), which is fine for the target deployment.
 
-2. **Session State Lost on Restart**
-   - Active sessions not recoverable
-   - Acceptable for V1 with startup recovery logging
-   - Could add DB-backed session state in V2
+2. **~~Session State Lost on Restart~~ — resolved**
+   - `SessionManager`'s active sessions and `main.py`'s live-camera session
+     now write-through mirror to Redis and are restored on startup (see
+     `restore_and_sweep()` in `session_service.py`, and `TECH_DEBT.md`'s
+     "four process-local state structures moved to Redis" entry). Requires
+     Redis to actually have persistence configured (`redis.conf` at the
+     repo root) — without it, this mirroring doesn't survive a *Redis*
+     restart/power-loss, only an app restart.
 
 3. **No Person Re-Detection Logic**
    - Assumes person stays for entire interaction

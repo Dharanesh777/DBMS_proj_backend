@@ -1,0 +1,293 @@
+CHANGELOG
+
+Summary of the fixes, removals, and additions made to the AG-OS backend
+during this remediation pass. [fix] = corrected existing behavior.
+[new] = added capability that didn't exist before.
+
+
+1. SECURITY FIXES
+------------------
+
+[fix] app/app.py
+  CORS was allow_origins=["*"] + allow_credentials=True together, an
+  invalid combination Starlette resolves by echoing back the caller's
+  Origin, enabling credentialed cross-origin requests. Set
+  allow_credentials=False (nothing in this app uses cookie/session auth).
+
+[fix] app/services/reminder_app/google_auth.py
+  Replaced the hardcoded PKCE FIXED_VERIFIER constant with a random
+  secrets.token_urlsafe(64) generated per OAuth flow.
+
+[fix] app/api/routes/caregivers.py, app/services/caregiver_service.py
+  Added user_id-scoped ownership checks on get/list/update/delete.
+  Previously any caller could read or modify any caregiver by guessing
+  an ID.
+
+[fix] app/api/routes/emotions.py, app/services/emotion_service.py
+  Same fix, scoped via interaction -> conversation.userid. Closed the
+  same enumeration hole on emotion records.
+
+[fix] app/services/calendar_service.py
+  Calendar event creation now verifies related_person_id is actually
+  linked to user_id via userknownperson before creating the event.
+
+[fix] app/controllers/audio_controller.py, app/routes/audio_routes.py
+  userid defaulted to 1 when omitted, silently misattributing
+  recordings. Now required, no default.
+
+[fix] app/services/llm_service.py
+  Wrapped raw transcript/context text in explicit <transcript>
+  delimiters with an instruction to treat it as data, not commands.
+  Mitigates prompt injection from spoken conversation.
+
+[fix] app/services/llm_service.py
+  Raises immediately if OPENAI_API_KEY is empty instead of failing
+  lazily deep inside the first real API call.
+
+[fix] app/api/routes/audio.py
+  Added a 25MB size cap and a content-type allow-list to audio upload.
+  Was open to unbounded uploads of any file type.
+
+[fix] app/ai_models/interaction/interaction_service.py
+  Added a magic-byte check before feeding client-supplied audio bytes
+  to ffmpeg/Whisper.
+
+[fix] requirements.txt, .gitignore
+  Reconciled three inconsistent requirement files into one pinned
+  requirements.txt; scoped .gitignore's blanket *.json down to actual
+  secret filenames (token.json, credentials.json).
+
+[fix] Dockerfile, .dockerignore (new)
+  Added a non-root USER, a HEALTHCHECK, and a .dockerignore excluding
+  .env, *.wav, and debug scripts from the built image.
+
+[fix] frontend/package.json
+  Bumped vite off the vulnerable ^4.5.0 range to 4.5.14.
+
+
+2. DATA LAYER & MIGRATIONS
+---------------------------
+
+[new] alembic/, alembic.ini
+  Alembic wasn't set up at all; schema existed only as whatever
+  create_all() produced, with no version control. Set up properly,
+  pulling the DB URL from the app's own Settings.
+
+[fix] app/models/*.py (all 9 models)
+  Added real ondelete= behavior to every foreign key (CASCADE on
+  ownership relations, SET NULL on optional references) and
+  index=True on hot-path lookup columns. APPLIED TO THE LIVE DB via
+  Alembic migration 74bf5b968796 -- verified against pg_constraint,
+  all 11 FKs now carry real cascade behavior.
+
+[fix] app/services/user_service.py, app/api/routes/users.py
+  delete_user() now catches IntegrityError and returns a clean 409
+  instead of an unhandled crash.
+
+[fix] app/models/user.py
+  Dropped the unused google_token_json column (zero rows had data) as
+  part of the same migration.
+
+[fix] app/schemas/calendar_event.py
+  Added a validator rejecting reminder_time >= event_datetime.
+
+[fix] app/models/face_encoding.py
+  Wrapped json.loads() on stored encoding data so corrupted rows
+  raise a clear error instead of an unhandled JSONDecodeError.
+
+
+3. CONCURRENCY FIXES
+----------------------
+
+[fix] app/services/session_service.py -- THE CRITICAL ONE
+  SessionManager closed over a per-request DB session inside a
+  background job that fired 30 minutes later, by which point the
+  request's session was long closed. The job now opens its own fresh
+  session via create_session().
+
+[fix] app/services/session_service.py
+  Added a threading.Lock around every read/write of _active_sessions,
+  previously mutated unlocked from request handlers, an async LLM
+  callback, and scheduler jobs simultaneously.
+
+[fix] app/services/face_recognition/face_service.py
+  Added double-checked locking around lazy model/cache loading to
+  stop concurrent first-callers from loading the same model twice.
+
+[fix] app/services/face_recognition/main.py
+  The session state dict (_session) was only lock-guarded in three of
+  the functions that touch it; /identify and /session-status
+  read/wrote it directly. Converted the lock to RLock and guarded
+  every access.
+
+[fix] app/services/face_recognition/main.py
+  /register-new committed the new person to DB before running
+  follow-up steps (interaction creation, cache clear, session end).
+  A failure there reported 500 despite the registration having
+  already succeeded. Restructured so registration failure and
+  post-registration failure are reported independently.
+
+
+4. EXTERNAL API FIXES
+-----------------------
+
+[fix] app/api/routes/calendar_events.py, app/api/routes/notes.py
+  Google Calendar/Tasks sync calls were blocking calls made directly
+  inside async def route handlers, stalling the event loop for every
+  other request. Wrapped in run_in_threadpool (the calendar/tasks
+  sync itself was later removed -- see section 5 -- these routes are
+  now pure DB writes).
+
+[fix] app/ai_models/reminders/reminder_routes.py
+  Timezone conversion hardcoded a timedelta(hours=5, minutes=30) IST
+  offset regardless of whether the input already carried a timezone,
+  which could silently double-shift. Replaced with real
+  zoneinfo.ZoneInfo("Asia/Kolkata") handling that only applies when
+  the input is naive.
+
+[fix] app/ai_models/reminders/tasks.py, celery_config.py
+  The Redis connection was a single client with no pool and no env
+  override. Added ConnectionPool, retry_on_timeout,
+  autoretry_for/retry_backoff on the task, and REDIS_HOST/REDIS_PORT
+  env vars used consistently across all files that talk to Redis.
+
+[fix] app/services/voice_app/recorder_util.py
+  Mic-open failures were caught, printed, and silently dropped; the
+  caller had no way to know recording actually failed.
+  start_session_recording() now returns whether the stream actually
+  opened, and a failed reminder POST retries with backoff.
+
+
+5. ARCHITECTURE CONSOLIDATION
+-------------------------------
+
+[fix] removed app/routes/face_routes.py, app/controllers/face_controller.py,
+      app/api/routes/persons.py, app/services/person_service.py
+  Two parallel face-recognition pipelines existed (/api/face/* and
+  /api/persons/*). Confirmed the frontend calls neither -- it only
+  talks to face_recognition/main.py's own routes. Removed both dead
+  pipelines and their dedicated test file.
+
+[fix] removed app/services/google_calendar.py, app/services/google_tasks.py,
+      users.google_token_json
+  Two Google OAuth token stores existed: a DB-backed one (unused by
+  the frontend) and a file-based one (reminder_app/google_auth.py,
+  actually live). Removed the unused DB-backed sync path;
+  calendar_service.py/note_service.py are now pure DB storage.
+
+[fix] removed app/services/whisper_service.py
+  Two Whisper models loaded independently ("base" vs "small"). Kept
+  "small" (chosen for Tamil support, already in the live recording
+  pipeline); repointed the one remaining route that used "base".
+
+[fix] removed app/core/scheduler.py
+  Migrated session-expiry timers from APScheduler (in-process,
+  memory-only) to Celery apply_async(eta=...)/revoke(). One
+  scheduling system instead of two. Added a fallback: if Redis is
+  unreachable when scheduling, the session still starts, just without
+  an auto-expiry timer, instead of hard-failing the request.
+
+[fix] removed server-side microphone capture
+      (audio_controller.py's record_audio_with_vad/record_audio_from_mic,
+      audio_routes.py's /record_from_mic)
+  It recorded the HOST MACHINE's mic, not the caller's.
+
+[new] app/services/face_recognition/main.py (+ /idle-audio),
+      frontend/src/components/CameraOverlay.jsx
+  Replaced it with client-side capture: the frontend records fixed
+  10-second chunks from the browser's microphone while idle and posts
+  each to the new /idle-audio endpoint, which transcribes and saves a
+  conversation row (only while the session state machine is actually
+  idle).
+
+[fix] repo cleanup
+  Removed ~30 stray session_*.wav recordings, debug_db.py,
+  register_face.py, dead test scripts, and two unused legacy
+  face-detection model files (res10_300x300...caffemodel,
+  deploy.prototxt) from the repo root.
+
+[fix] removed backend/
+  The stale, fully-merged duplicate directory. Confirmed zero code
+  dependency (including with backend/ physically removed from disk
+  during testing), and the full test suite passing 12/12 against a
+  live server in that state.
+
+
+6. INFRASTRUCTURE
+-------------------
+
+[new] .env.example
+  Didn't exist. Added, covering every env var the app actually reads
+  (DB, LLM provider, Google, Redis, app tuning).
+
+[fix] requirements.txt
+  Removed apscheduler and scipy (both fully unused after the changes
+  above); added alembic, celery, redis, scikit-learn to match what's
+  actually imported.
+
+[fix] TECH_DEBT.md
+  Updated to reflect the face/persons consolidation. The
+  tenant-isolation bug on /identify is still open (now documented as
+  needing a fix directly in face_service.py, since there's no more
+  /api/persons to route through).
+
+
+7. FRONTEND FIXES
+-------------------
+
+[fix] frontend/src/App.jsx, CameraOverlay.jsx
+  Added AbortController to every polling fetch. Overlapping in-flight
+  requests could previously resolve out of order and overwrite newer
+  state with stale data.
+
+[fix] frontend/src/components/CameraOverlay.jsx
+  The polling interval read session state from a ref (never triggered
+  a re-render), so it never actually restarted when the session
+  transitioned between idle and active. Made it real React state.
+
+[fix] frontend/src/App.jsx
+  The polling useEffect depended on showModal, tearing down and
+  recreating all three intervals (including the unrelated 30s
+  reminders poll) every time the modal toggled. Moved to a ref.
+
+[new] frontend/src/ErrorBoundary.jsx
+  No error boundary existed anywhere; an unhandled render exception
+  blanked the entire UI. Added one, wraps <App/> in main.jsx.
+
+[new] frontend/src/config.js
+  http://localhost:8004 was hardcoded independently in two files.
+  Extracted to a shared API_BASE, overridable via VITE_API_BASE.
+
+[fix] frontend/src/components/CameraOverlay.jsx
+  Added onUserMediaError handling, explicit media-stream cleanup on
+  unmount, and a reused canvasRef instead of allocating a new canvas
+  every poll.
+
+[fix] frontend/src/App.jsx
+  llmProvider was cached in localStorage and never reconciled with
+  the server. Added a GET /config/provider endpoint and a
+  reconciliation fetch on mount.
+
+[fix] removed frontend/src/components/NotificationBar.jsx, face-api.js,
+      framer-motion
+  Dead component (never imported) and its two dependencies.
+
+
+8. TEST INFRASTRUCTURE
+------------------------
+
+[fix] removed tests/test_person_service.py
+  Tested the now-removed person_service.py; removed along with it.
+
+[fix] tests/test_api.py -- full rewrite
+  Was a standalone script with a hand-rolled main() threading IDs
+  through positional args; pytest misread each parameter as a fixture
+  request and errored on every test. Rewritten with real pytest
+  fixtures; skips gracefully (not error) if no server is reachable.
+
+[fix] app/schemas/user.py
+  A bug the rewritten tests caught immediately: GET /api/users/
+  500'd for EVERY caller because one legacy row had a .local email
+  address that strict EmailStr output validation rejected. Widened
+  the response schema's email field to plain str (input validation on
+  create is unaffected).

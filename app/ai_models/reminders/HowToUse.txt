@@ -13,13 +13,21 @@ and run that
 
 INSIDE VENV
 celery -A app.ai_models.reminders.celery_config.celery_app worker --loglevel=info --pool=solo
-python server.py
+uvicorn app.services.face_recognition.main:app --reload --port 8004
 
 INSIDE CMD PROMPT
 1.redis-server.exe redis.windows.conf
 
 2.redis-cli config set stop-writes-on-bgsave-error no
 redis-cli config set save ""
+   ^ LOCAL WINDOWS DEV CONVENIENCE ONLY — `save ""` disables RDB snapshots
+   entirely (no persistence at all), fine for a throwaway dev instance but
+   NOT what any real deployment should run. session_service.py and
+   interaction_routes.py mirror state to Redis specifically to survive a
+   crash/restart, and depend on Redis actually persisting it. For anything
+   beyond local dev (including the Pi 3 target), start Redis with the repo's
+   root-level redis.conf (`appendonly yes` / `appendfsync everysec`)
+   instead of these two commands — see /howtorun.txt.
 -------------------------------
 
 In the main file we can call the function ->

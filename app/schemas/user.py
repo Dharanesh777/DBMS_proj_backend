@@ -8,17 +8,20 @@ from typing import Optional
 
 class UserBase(BaseModel):
     """Base user schema"""
-    name: Optional[str] = Field(None, max_length=100)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
     age: Optional[int] = Field(None, ge=0, le=150)
     medicalcondition: Optional[str] = None
     emergencycontact: Optional[str] = Field(None, max_length=20)
-    email: Optional[EmailStr] = None
+    # max_length matches users.email VARCHAR(150) — without it, a >150-char
+    # valid email passes Pydantic and then throws a raw Postgres DataError
+    # (surfaced as an ugly 500) instead of a clean 400.
+    email: Optional[EmailStr] = Field(None, max_length=150)
 
 
 class UserCreate(UserBase):
     """Schema for creating a new user"""
     name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
+    email: EmailStr = Field(..., max_length=150)
 
 
 class UserUpdate(UserBase):
