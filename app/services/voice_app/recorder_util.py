@@ -54,7 +54,9 @@ class BackgroundRecorder:
                 if attempt < attempts:
                     print(f"[MIC] Retry {attempt}/{attempts} opening input stream after error: {e}", flush=True)
                     time.sleep(retry_delay)
-        raise last_err
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("Failed to open input stream")
 
     def _record_loop(self, samplerate):
         try:
