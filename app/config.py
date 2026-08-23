@@ -22,10 +22,21 @@ class Settings(BaseSettings):
     # ── Google OAuth / Calendar / Tasks ───────────────────────────────────────
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/oauth2callback"
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8004/oauth2callback"
     CALENDAR_ID: str = "primary"
     GOOGLE_TOKEN_FILE: str = "token.json"
     GOOGLE_CREDENTIALS_FILE: str = "credentials.json"
+
+    # ── Redis (application state — session engine, sub-session chunking, face
+    # cache, temp registration holds; see app/services/redis_client.py) ────────
+    # NOTE: Celery's own broker/backend (app/ai_models/reminders/celery_config.py)
+    # reads REDIS_HOST/REDIS_PORT directly via os.getenv rather than through
+    # this Settings class — that's a pre-existing inconsistency (see
+    # TECH_DEBT.md), not something this REDIS_STATE_DB addition changes. Keep
+    # the host/port values identical between the two if overriding via env.
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_STATE_DB: int = 2   # distinct from Celery's db=0 (broker) / db=1 (backend)
 
     # ── App ───────────────────────────────────────────────────────────────────
     APP_ENV: str = "development"

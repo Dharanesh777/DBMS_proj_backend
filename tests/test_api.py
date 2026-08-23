@@ -1,6 +1,8 @@
 """
-tests/test_api.py — Integration tests against a running app.app:app server
-(start it with `python server.py`, or `uvicorn app.app:app --port 8000`).
+tests/test_api.py — Integration tests against a running
+app.services.face_recognition.main:app server (start it with
+`uvicorn app.services.face_recognition.main:app --port 8004`, `start.bat`,
+or `docker compose up`).
 
 Previously a standalone script (`python test_api.py`) with a hand-rolled
 main() threading IDs through positional function args. Running it under
@@ -25,7 +27,7 @@ from app.db.session import create_session
 from app.models.person import KnownPerson
 from app.models.junction_tables import userknownperson
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8004"
 
 
 def _server_reachable() -> bool:
@@ -37,7 +39,8 @@ def _server_reachable() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _server_reachable(),
-    reason=f"No server reachable at {BASE_URL} — start it with `python server.py` first.",
+    reason=f"No server reachable at {BASE_URL} — start it with "
+           f"`uvicorn app.services.face_recognition.main:app --port 8004` first.",
 )
 
 

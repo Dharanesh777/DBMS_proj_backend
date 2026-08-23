@@ -5,7 +5,7 @@
 ## Base URL
 
 ```
-http://localhost:8000
+http://localhost:8004
 ```
 
 ## Authentication
@@ -816,7 +816,7 @@ For validation errors (422):
 
 For API contract questions or clarifications:
 1. Check this document first
-2. Review Swagger UI at http://localhost:8000/docs
+2. Review Swagger UI at http://localhost:8004/docs
 3. Contact backend engineer
 4. Schedule team sync if needed
 
@@ -1420,50 +1420,50 @@ All endpoints now align with the actual PostgreSQL schema:
 ## Testing
 
 ### Swagger UI
-Access interactive API documentation at: http://localhost:8000/docs
+Access interactive API documentation at: http://localhost:8004/docs
 
 ### ReDoc
-Access alternative documentation at: http://localhost:8000/redoc
+Access alternative documentation at: http://localhost:8004/redoc
 
 ### Example Test Flow
 ```bash
 # 1. Create a user
-curl -X POST http://localhost:8000/api/users/ \
+curl -X POST http://localhost:8004/api/users/ \
   -H "Content-Type: application/json" \
   -d '{"name": "John Doe", "email": "john@example.com", "age": 65}'
 
 # 2. Create a caregiver
-curl -X POST http://localhost:8000/api/caregivers/ \
+curl -X POST http://localhost:8004/api/caregivers/ \
   -H "Content-Type: application/json" \
   -d '{"name": "Jane Doe", "relationshiptouser": "daughter", "accesslevel": "admin"}'
 
 # 3. Assign caregiver to user
-curl -X POST http://localhost:8000/api/caregivers/assign \
+curl -X POST http://localhost:8004/api/caregivers/assign \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "caregiver_id": 1}'
 
 # 4. Register a person
-curl -X POST http://localhost:8000/api/persons/register \
+curl -X POST http://localhost:8004/api/persons/register \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "name": "Ravi Kumar", "relationship_type": "colleague", "encoding": [0.1, 0.2, ...]}'
 
 # 5. Start interaction
-curl -X POST http://localhost:8000/api/interactions/start \
+curl -X POST http://localhost:8004/api/interactions/start \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "person_id": 1, "location": "Living Room"}'
 
 # 6. Record emotion
-curl -X POST http://localhost:8000/api/emotions/ \
+curl -X POST http://localhost:8004/api/emotions/ \
   -H "Content-Type: application/json" \
   -d '{"interaction_id": 1, "emotiontype": "happy", "confidencelevel": 0.85}'
 
 # 7. Transcribe audio
-curl -X POST http://localhost:8000/api/audio/transcribe \
+curl -X POST http://localhost:8004/api/audio/transcribe \
   -F "audio=@recording.wav" \
   -F "interaction_id=1"
 
 # 8. End interaction
-curl -X POST http://localhost:8000/api/interactions/end \
+curl -X POST http://localhost:8004/api/interactions/end \
   -H "Content-Type: application/json" \
   -d '{"interaction_id": 1}'
 ```

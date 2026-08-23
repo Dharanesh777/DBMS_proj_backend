@@ -7,14 +7,14 @@ from typing import Optional
 
 class EmotionRecordBase(BaseModel):
     """Base emotion record schema"""
-    emotiontype: Optional[str] = Field(None, max_length=50)
+    emotiontype: Optional[str] = Field(None, min_length=1, max_length=50)
     confidencelevel: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 
 class EmotionRecordCreate(EmotionRecordBase):
     """Schema for creating a new emotion record"""
     interaction_id: int = Field(..., gt=0)
-    emotiontype: str = Field(..., max_length=50)
+    emotiontype: str = Field(..., min_length=1, max_length=50)
     confidencelevel: float = Field(..., ge=0.0, le=1.0)
 
 

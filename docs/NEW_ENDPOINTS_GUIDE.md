@@ -12,7 +12,7 @@ We've added **17 new endpoints** to cover all database tables. The backend now h
 
 **Create a user**:
 ```bash
-curl -X POST http://localhost:8000/api/users/ \
+curl -X POST http://localhost:8004/api/users/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "John Doe",
@@ -25,24 +25,24 @@ curl -X POST http://localhost:8000/api/users/ \
 
 **Get user**:
 ```bash
-curl http://localhost:8000/api/users/1
+curl http://localhost:8004/api/users/1
 ```
 
 **List all users**:
 ```bash
-curl http://localhost:8000/api/users/?skip=0&limit=10
+curl http://localhost:8004/api/users/?skip=0&limit=10
 ```
 
 **Update user**:
 ```bash
-curl -X PUT http://localhost:8000/api/users/1 \
+curl -X PUT http://localhost:8004/api/users/1 \
   -H "Content-Type: application/json" \
   -d '{"age": 66}'
 ```
 
 **Delete user**:
 ```bash
-curl -X DELETE http://localhost:8000/api/users/1
+curl -X DELETE http://localhost:8004/api/users/1
 ```
 
 ---
@@ -51,7 +51,7 @@ curl -X DELETE http://localhost:8000/api/users/1
 
 **Create a caregiver**:
 ```bash
-curl -X POST http://localhost:8000/api/caregivers/ \
+curl -X POST http://localhost:8004/api/caregivers/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Jane Doe",
@@ -62,19 +62,19 @@ curl -X POST http://localhost:8000/api/caregivers/ \
 
 **Assign caregiver to user**:
 ```bash
-curl -X POST http://localhost:8000/api/caregivers/assign \
+curl -X POST http://localhost:8004/api/caregivers/assign \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "caregiver_id": 1}'
 ```
 
 **Get user's caregivers**:
 ```bash
-curl http://localhost:8000/api/users/1/caregivers
+curl http://localhost:8004/api/users/1/caregivers
 ```
 
 **Unassign caregiver**:
 ```bash
-curl -X POST http://localhost:8000/api/caregivers/unassign \
+curl -X POST http://localhost:8004/api/caregivers/unassign \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "caregiver_id": 1}'
 ```
@@ -85,7 +85,7 @@ curl -X POST http://localhost:8000/api/caregivers/unassign \
 
 **Record an emotion** (Member A):
 ```bash
-curl -X POST http://localhost:8000/api/emotions/ \
+curl -X POST http://localhost:8004/api/emotions/ \
   -H "Content-Type: application/json" \
   -d '{
     "interaction_id": 123,
@@ -96,7 +96,7 @@ curl -X POST http://localhost:8000/api/emotions/ \
 
 **Get emotions for an interaction**:
 ```bash
-curl http://localhost:8000/api/emotions/interaction/123
+curl http://localhost:8004/api/emotions/interaction/123
 ```
 
 **Common emotion types**:
@@ -113,51 +113,51 @@ curl http://localhost:8000/api/emotions/interaction/123
 
 ```bash
 # Step 1: Create a user
-USER_RESPONSE=$(curl -s -X POST http://localhost:8000/api/users/ \
+USER_RESPONSE=$(curl -s -X POST http://localhost:8004/api/users/ \
   -H "Content-Type: application/json" \
   -d '{"name": "John Doe", "email": "john@example.com", "age": 65}')
 USER_ID=$(echo $USER_RESPONSE | jq -r '.userid')
 
 # Step 2: Create a caregiver
-CAREGIVER_RESPONSE=$(curl -s -X POST http://localhost:8000/api/caregivers/ \
+CAREGIVER_RESPONSE=$(curl -s -X POST http://localhost:8004/api/caregivers/ \
   -H "Content-Type: application/json" \
   -d '{"name": "Jane Doe", "relationshiptouser": "daughter", "accesslevel": "admin"}')
 CAREGIVER_ID=$(echo $CAREGIVER_RESPONSE | jq -r '.caregiverid')
 
 # Step 3: Assign caregiver to user
-curl -X POST http://localhost:8000/api/caregivers/assign \
+curl -X POST http://localhost:8004/api/caregivers/assign \
   -H "Content-Type: application/json" \
   -d "{\"user_id\": $USER_ID, \"caregiver_id\": $CAREGIVER_ID}"
 
 # Step 4: Register a person (requires face encoding)
-PERSON_RESPONSE=$(curl -s -X POST http://localhost:8000/api/persons/register \
+PERSON_RESPONSE=$(curl -s -X POST http://localhost:8004/api/persons/register \
   -H "Content-Type: application/json" \
   -d "{\"user_id\": $USER_ID, \"name\": \"Ravi Kumar\", \"relationship_type\": \"colleague\", \"encoding\": [0.1, 0.2, ...]}")
 PERSON_ID=$(echo $PERSON_RESPONSE | jq -r '.person_id')
 
 # Step 5: Start an interaction
-INTERACTION_RESPONSE=$(curl -s -X POST http://localhost:8000/api/interactions/start \
+INTERACTION_RESPONSE=$(curl -s -X POST http://localhost:8004/api/interactions/start \
   -H "Content-Type: application/json" \
   -d "{\"user_id\": $USER_ID, \"person_id\": $PERSON_ID, \"location\": \"Living Room\"}")
 INTERACTION_ID=$(echo $INTERACTION_RESPONSE | jq -r '.interaction_id')
 
 # Step 6: Record emotion during interaction
-curl -X POST http://localhost:8000/api/emotions/ \
+curl -X POST http://localhost:8004/api/emotions/ \
   -H "Content-Type: application/json" \
   -d "{\"interaction_id\": $INTERACTION_ID, \"emotiontype\": \"happy\", \"confidencelevel\": 0.85}"
 
 # Step 7: Transcribe audio
-curl -X POST http://localhost:8000/api/audio/transcribe \
+curl -X POST http://localhost:8004/api/audio/transcribe \
   -F "audio=@recording.wav" \
   -F "interaction_id=$INTERACTION_ID"
 
 # Step 8: End interaction
-curl -X POST http://localhost:8000/api/interactions/end \
+curl -X POST http://localhost:8004/api/interactions/end \
   -H "Content-Type: application/json" \
   -d "{\"interaction_id\": $INTERACTION_ID}"
 
 # Step 9: View emotions for the interaction
-curl http://localhost:8000/api/emotions/interaction/$INTERACTION_ID
+curl http://localhost:8004/api/emotions/interaction/$INTERACTION_ID
 ```
 
 ---
@@ -165,12 +165,12 @@ curl http://localhost:8000/api/emotions/interaction/$INTERACTION_ID
 ## API Documentation
 
 ### Interactive Docs
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: http://localhost:8004/docs
+- **ReDoc**: http://localhost:8004/redoc
 
 ### Try It Out
 1. Start the server: `cd backend && python run.py`
-2. Open http://localhost:8000/docs
+2. Open http://localhost:8004/docs
 3. Click on any endpoint
 4. Click "Try it out"
 5. Fill in the parameters
@@ -273,7 +273,7 @@ import requests
 
 # Create user via API
 response = requests.post(
-    "http://localhost:8000/api/users/",
+    "http://localhost:8004/api/users/",
     json={
         "name": "John Doe",
         "email": "john@example.com",
@@ -295,7 +295,7 @@ pytest tests/
 ```
 
 ### Manual Testing
-Use the Swagger UI at http://localhost:8000/docs
+Use the Swagger UI at http://localhost:8004/docs
 
 ### Integration Testing
 Run the complete workflow example above
@@ -307,7 +307,7 @@ Run the complete workflow example above
 - **API Contracts**: See `docs/API_CONTRACTS.md`
 - **Complete Summary**: See `docs/COMPLETE_API_SUMMARY.md`
 - **Backend README**: See `docs/BACKEND_README.md`
-- **Swagger UI**: http://localhost:8000/docs
+- **Swagger UI**: http://localhost:8004/docs
 
 ---
 

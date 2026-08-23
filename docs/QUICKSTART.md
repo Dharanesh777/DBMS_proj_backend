@@ -48,14 +48,14 @@ python run.py
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Server will start at: http://localhost:8000
+Server will start at: http://localhost:8004
 
 ## Testing the API
 
 ### 1. Health Check
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8004/health
 ```
 
 Expected response:
@@ -69,7 +69,7 @@ Expected response:
 ### 2. Register a Person
 
 ```bash
-curl -X POST http://localhost:8000/api/persons/register \
+curl -X POST http://localhost:8004/api/persons/register \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": 1,
@@ -84,7 +84,7 @@ curl -X POST http://localhost:8000/api/persons/register \
 ### 3. Identify a Person
 
 ```bash
-curl -X POST http://localhost:8000/api/persons/identify \
+curl -X POST http://localhost:8004/api/persons/identify \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": 1,
@@ -95,7 +95,7 @@ curl -X POST http://localhost:8000/api/persons/identify \
 ### 4. Start an Interaction
 
 ```bash
-curl -X POST http://localhost:8000/api/interactions/start \
+curl -X POST http://localhost:8004/api/interactions/start \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": 1,
@@ -115,7 +115,7 @@ Response:
 ### 5. Append Transcript
 
 ```bash
-curl -X POST http://localhost:8000/api/sessions/append \
+curl -X POST http://localhost:8004/api/sessions/append \
   -H "Content-Type: application/json" \
   -d '{
     "interaction_id": 1,
@@ -126,7 +126,7 @@ curl -X POST http://localhost:8000/api/sessions/append \
 ### 6. End Interaction
 
 ```bash
-curl -X POST http://localhost:8000/api/interactions/end \
+curl -X POST http://localhost:8004/api/interactions/end \
   -H "Content-Type: application/json" \
   -d '{
     "interaction_id": 1
@@ -145,7 +145,7 @@ Response:
 ### 7. Retrieve Memory
 
 ```bash
-curl "http://localhost:8000/api/memory/1?user_id=1"
+curl "http://localhost:8004/api/memory/1?user_id=1"
 ```
 
 Response:
@@ -167,8 +167,8 @@ Response:
 
 Once the server is running, visit:
 
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: http://localhost:8004/docs
+- **ReDoc**: http://localhost:8004/redoc
 
 ## Common Issues
 
