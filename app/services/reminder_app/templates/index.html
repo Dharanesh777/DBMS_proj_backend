@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Google Calendar Reminders</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 40px auto; line-height: 1.6; background-color: #f4f7f6; color: #333; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1, h3 { color: #4285f4; margin-top: 0; }
+        input, button { padding: 12px; width: 100%; box-sizing: border-box; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 6px; font-size: 16px; }
+        button { background: #4285f4; color: white; border: none; cursor: pointer; font-weight: bold; transition: background 0.3s; }
+        button:hover { background: #357ae8; }
+        .login-btn { background: #db4437; }
+        .login-btn:hover { background: #c53929; }
+        #status { font-weight: bold; margin-bottom: 10px; }
+        .success { color: #28a745; }
+        
+        /* Popup Styles */
+        #notification-popup {
+            display: none; position: fixed; top: 20px; right: 20px; width: 300px; 
+            background: #ffc107; color: #000; padding: 20px; border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2); z-index: 1000;
+            border-left: 8px solid #e0a800; animation: slideIn 0.5s ease-out;
+        }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+    <div id="notification-popup">
+        <strong id="popup-title">Reminder!</strong>
+        <p id="popup-message">Time to do something!</p>
+        <button onclick="closePopup()" style="background:transparent; color: #333; border: 1px solid #333; margin:0; padding:5px;">Dismiss</button>
+    </div>
+
+    <div class="card">
+        <h1>Sync Calendar</h1>
+        <a href="/auth"><button class="login-btn">Authorize Google Calendar</button></a>
+    </div>
+
+    <div class="card">
+        <h3>Create New Reminder</h3>
+        <form id="reminderForm">
+            <input type="text" id="title" placeholder="Reminder Title (e.g. Drink Water)" required>
+            <input type="date" id="date" required>
+            <input type="time" id="time" required>
+            <button type="submit">Set Reminder</button>
+        </form>
+        <div id="status"></div>
+    </div>
+
+    <div class="card">
+        <h3>Active Monitor</h3>
+        <p>Status: <span id="monitor-status" style="color: green;">● Listening for reminders...</span></p>
+        <div id="upcoming-list" style="font-size: 0.9em; color: #666;"></div>
+    </div>
+
+    <script>
+        const notifiedEvents = new Set();
+
+        // 1. Create Reminder
+        document.getElementById('reminderForm').onsubmit = async (e) => {
+            e.preventDefault();
+            document.getElementById('status').innerText = "Syncing with Google...";
+            const data = {
+                title: document.getElementById('title').value,
+                date: document.getElementById('date').value,
+                time: document.getElementById('time').value
+            };
+            try {
+                const res = await fetch('/create-reminder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                document.getElementById('status').innerHTML = '<span class="success">✔ Reminder set on Google Calendar!</span>';
+                fetchReminders(); // Refresh list
+            } catch (err) {
+                document.getElementById('status').innerText = "Connect Error.";
+            }
+        };
+
+        // 2. Fetch and Check Reminders
+        async function fetchReminders() {
+            try {
+                const res = await fetch('/get-reminders');
+                const events = await res.json();
+                
+                const now = new Date();
+                
+                const listEl = document.getElementById('upcoming-list');
+                listEl.innerHTML = "<strong>Next 24h:</strong><br>" + events.map(e => `• ${e.summary} (${new Date(e.start.dateTime).toLocaleTimeString()})`).join('<br>');
+
+                events.forEach(event => {
+                    const eventTime = new Date(event.start.dateTime);
+                    const diff = (eventTime - now) / 1000; // difference in seconds
+
+                    // If event is starting in the next 60 seconds and hasn't been notified
+                    if (diff <= 60 && diff > -60 && !notifiedEvents.has(event.id)) {
+                        triggerPopup(event.summary, `Scheduled for ${eventTime.toLocaleTimeString()}`);
+                        notifiedEvents.add(event.id);
+                    }
+                });
+            } catch (err) {
+                console.error("Monitoring error", err);
+            }
+        }
+
+        function triggerPopup(title, msg) {
+            document.getElementById('popup-title').innerText = "📅 " + title;
+            document.getElementById('popup-message').innerText = msg;
+            document.getElementById('notification-popup').style.display = 'block';
+            
+            // Optional: Play a sound
+            const audio = new Audio('https://www.soundjay.com/buttons/sounds/beep-07.mp3');
+            audio.play().catch(() => {}); // Browsers might block auto-play
+        }
+
+        function closePopup() {
+            document.getElementById('notification-popup').style.display = 'none';
+        }
+
+        // Check every 15 seconds
+        setInterval(fetchReminders, 15000);
+        fetchReminders(); // Initial check
+    </script>
+</body>
+</html>
