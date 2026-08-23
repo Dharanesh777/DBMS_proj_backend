@@ -1,5 +1,35 @@
 # Tech Debt
 
+## Note: `origin/main` intentionally diverges from `TejasRP24/DBMS_proj_backend:main`
+
+GitHub reported this branch 1 ahead / 5 behind `TejasRP24/DBMS_proj_backend:main`.
+Investigated before merging anything — those 5 commits are Tejas's
+`raspberry-pi` branch (PR #10 there), which deliberately deletes ~46,700
+lines (every ORM model, API route, the frontend, `yolov8n.pt`, the Haar
+cascade asset, `alembic/`, the Dockerfile, all docs) down to a minimal
+audio-transcription stub. A standard merge would have wiped this backend's
+entire production surface — the Redis durability work, the face-detection
+fix, the full REST API — off of `main`. **Not merged**, by explicit choice.
+
+What *was* brought in, as an addition, not a replacement: the one
+genuinely new thing in that branch, `app/services/voice_app/transcription_service_rpi_fasterwhisper.py`
+(a `faster-whisper`/`tiny.en`/int8 backend, Pi-CPU-oriented — real progress
+on the "dev-machine timing isn't a Pi 3 proxy" gap that recurs throughout
+this doc) plus its benchmark script (`scripts/test_rpi_transcribe.py`).
+Kept as a separate module, unwired from the app — see its own docstring
+for why it isn't a drop-in replacement for the primary
+`transcription_service.py` (different model/language coverage, no VAD
+gate, different cleanup default). Verified it actually works in this
+environment: real end-to-end transcription against a local test WAV file,
+not just an import check.
+
+Practical consequence: GitHub's "behind" counter will likely still show a
+nonzero count after this, since no merge commit was created — that's
+expected, not a bug. Reconciling the two branches' *history* (as opposed
+to cherry-picking useful content, which is what happened here) is a
+decision for whoever owns both repos, not something to do unilaterally
+given what merging would actually delete.
+
 ## Resolved: `detect_face()`'s Haar cascade sometimes returned the WRONG PERSON'S face
 
 Found while investigating an unrelated accuracy anomaly during face-backend
