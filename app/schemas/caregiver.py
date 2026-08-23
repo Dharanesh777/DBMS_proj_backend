@@ -7,16 +7,16 @@ from typing import Optional
 
 class CaregiverBase(BaseModel):
     """Base caregiver schema"""
-    name: Optional[str] = Field(None, max_length=100)
-    relationshiptouser: Optional[str] = Field(None, max_length=50)
-    accesslevel: Optional[str] = Field(None, max_length=20)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    relationshiptouser: Optional[str] = Field(None, min_length=1, max_length=50)
+    accesslevel: Optional[str] = Field(None, min_length=1, max_length=20)
 
 
 class CaregiverCreate(CaregiverBase):
     """Schema for creating a new caregiver"""
     name: str = Field(..., min_length=1, max_length=100)
-    relationshiptouser: str = Field(..., max_length=50)
-    accesslevel: str = Field(default="read", max_length=20)
+    relationshiptouser: str = Field(..., min_length=1, max_length=50)
+    accesslevel: str = Field(default="read", min_length=1, max_length=20)
 
 
 class CaregiverUpdate(CaregiverBase):

@@ -260,51 +260,51 @@ All list endpoints support pagination:
 ## Testing
 
 ### Swagger UI
-Interactive API documentation: http://localhost:8000/docs
+Interactive API documentation: http://localhost:8004/docs
 
 ### ReDoc
-Alternative documentation: http://localhost:8000/redoc
+Alternative documentation: http://localhost:8004/redoc
 
 ### Example Test Sequence
 ```bash
 # 1. Create user
-curl -X POST http://localhost:8000/api/users/ \
+curl -X POST http://localhost:8004/api/users/ \
   -H "Content-Type: application/json" \
   -d '{"name": "John Doe", "email": "john@example.com", "age": 65}'
 
 # 2. Create caregiver
-curl -X POST http://localhost:8000/api/caregivers/ \
+curl -X POST http://localhost:8004/api/caregivers/ \
   -H "Content-Type: application/json" \
   -d '{"name": "Jane Doe", "relationshiptouser": "daughter", "accesslevel": "admin"}'
 
 # 3. Assign caregiver to user
-curl -X POST http://localhost:8000/api/caregivers/assign \
+curl -X POST http://localhost:8004/api/caregivers/assign \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "caregiver_id": 1}'
 
 # 4. Get user's caregivers
-curl http://localhost:8000/api/users/1/caregivers
+curl http://localhost:8004/api/users/1/caregivers
 
 # 5. Register person
-curl -X POST http://localhost:8000/api/persons/register \
+curl -X POST http://localhost:8004/api/persons/register \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "name": "Ravi Kumar", "relationship_type": "colleague", "encoding": [...]}'
 
 # 6. Start interaction
-curl -X POST http://localhost:8000/api/interactions/start \
+curl -X POST http://localhost:8004/api/interactions/start \
   -H "Content-Type: application/json" \
   -d '{"user_id": 1, "person_id": 1, "location": "Living Room"}'
 
 # 7. Record emotion
-curl -X POST http://localhost:8000/api/emotions/ \
+curl -X POST http://localhost:8004/api/emotions/ \
   -H "Content-Type: application/json" \
   -d '{"interaction_id": 1, "emotiontype": "happy", "confidencelevel": 0.85}'
 
 # 8. Get emotions for interaction
-curl http://localhost:8000/api/emotions/interaction/1
+curl http://localhost:8004/api/emotions/interaction/1
 
 # 9. End interaction
-curl -X POST http://localhost:8000/api/interactions/end \
+curl -X POST http://localhost:8004/api/interactions/end \
   -H "Content-Type: application/json" \
   -d '{"interaction_id": 1}'
 ```

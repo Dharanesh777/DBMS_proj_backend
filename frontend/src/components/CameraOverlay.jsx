@@ -8,6 +8,20 @@ const SCAN_INTERVAL   = 1500;   // Poll interval while idle (ms)
 const SESSION_POLL_MS = 500;    // Fast poll interval during active session (ms)
 const IDLE_AUDIO_CHUNK_MS = 10000; // length of each idle-state audio chunk sent to the server
 const MAX_CONSECUTIVE_FAILURES_LOGGED = 5; // stop spamming the console after this many
+const IDLE_AUDIO_MIME_CANDIDATES = ['audio/webm', 'audio/mp4', 'audio/ogg'];
+const IDLE_AUDIO_RETRY_DELAY_MS = 1000; // backoff before retrying a failed recorder.start()/construction
+
+// audio/webm (the old hardcoded value) isn't supported on Safari/iOS — MediaRecorder
+// construction throws every time there, which used to permanently stop idle-audio
+// capture for the rest of the idle period with no retry. Pick whatever the browser
+// actually supports, falling back to the browser's own default (undefined mimeType)
+// rather than giving up.
+function pickSupportedMimeType() {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return undefined;
+  }
+  return IDLE_AUDIO_MIME_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type));
+}
 
 const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
   const webcamRef    = useRef(null);
@@ -166,8 +180,30 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
     let currentRecorder = null;
     let nextChunkTimer = null;
 
+    // Wraps recordAndSendChunk so every scheduling call site (initial kickoff,
+    // onstop's self-re-invocation, and the retry-after-failure paths below) is
+    // guaranteed to have its rejection handled — recordAndSendChunk is async
+    // and was previously invoked bare from setTimeout, so any throw inside it
+    // (e.g. recorder.start() below, before it had a try/catch) became an
+    // unhandled promise rejection instead of a recoverable, logged failure.
+    const safeRecordAndSendChunk = () => {
+      recordAndSendChunk().catch((err) => {
+        console.error('Idle audio: unexpected error in capture loop:', err);
+      });
+    };
+
     const recordAndSendChunk = async () => {
       if (cancelled) return;
+
+      // Re-validate a cached stream before reusing it — if its track ended
+      // (device unplugged/reclaimed, permission revoked mid-session) a stale
+      // stream still constructs a MediaRecorder "successfully" but produces
+      // zero dataavailable events, so chunks stay empty and nothing ever
+      // uploads again for the rest of the idle period with no warning at all.
+      if (stream && stream.getAudioTracks().every((t) => t.readyState === 'ended')) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
 
       if (!stream) {
         try {
@@ -184,10 +220,11 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
 
       const chunks = [];
       let recorder;
+      const mimeType = pickSupportedMimeType();
       try {
-        recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       } catch (err) {
-        console.warn('Idle audio: MediaRecorder unavailable:', err.message);
+        console.warn('Idle audio: MediaRecorder unavailable, giving up for this idle period:', err.message);
         return;
       }
       currentRecorder = recorder;
@@ -197,7 +234,7 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
       };
       recorder.onstop = () => {
         if (chunks.length > 0) {
-          const blob = new Blob(chunks, { type: 'audio/webm' });
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
           const formData = new FormData();
           formData.append('file', blob, 'idle_chunk.webm');
           fetch(IDLE_AUDIO_URL, { method: 'POST', body: formData }).catch((err) => {
@@ -205,17 +242,34 @@ const CameraOverlay = ({ onSessionEvent, sysStatus }) => {
           });
         }
         if (!cancelled) {
-          nextChunkTimer = setTimeout(recordAndSendChunk, 0);
+          nextChunkTimer = setTimeout(safeRecordAndSendChunk, 0);
         }
       };
 
-      recorder.start();
+      try {
+        recorder.start();
+      } catch (err) {
+        // Stream/device went bad between construction and start() (e.g. a
+        // mid-session unplug/reclaim). Previously this threw with nothing
+        // ever scheduling a retry, silently killing capture for the rest of
+        // the idle period. Drop the stream so the next attempt re-acquires
+        // getUserMedia instead of reusing a dead one, and retry after a
+        // short backoff instead of a tight failure loop.
+        console.warn('Idle audio: recorder.start() failed, retrying shortly:', err.message);
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = null;
+        if (!cancelled) {
+          nextChunkTimer = setTimeout(safeRecordAndSendChunk, IDLE_AUDIO_RETRY_DELAY_MS);
+        }
+        return;
+      }
+
       nextChunkTimer = setTimeout(() => {
         if (!cancelled && recorder.state !== 'inactive') recorder.stop();
       }, IDLE_AUDIO_CHUNK_MS);
     };
 
-    recordAndSendChunk();
+    safeRecordAndSendChunk();
 
     return () => {
       cancelled = true;

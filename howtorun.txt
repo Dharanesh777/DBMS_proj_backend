@@ -31,7 +31,17 @@ venv\Scripts\activate
 pip install -r requirements.txt
 cd frontend && npm install && cd ..
 
-# Start backend (in one terminal)
+# Start Redis WITH PERSISTENCE (required — see redis.conf at repo root for
+# why: without this, session-engine state that's supposed to survive a
+# crash/restart is silently lost on every Redis restart or power loss, not
+# just app restarts)
+redis-server redis.conf
+
+# Start Celery worker (in another terminal — needed for reminders + the
+# 30-min REST session timers)
+venv\Scripts\python -m celery -A app.ai_models.reminders.celery_config.celery_app worker --loglevel=info --pool=solo
+
+# Start backend (in another terminal)
 venv\Scripts\python -m uvicorn app.services.face_recognition.main:app --reload --port 8004
 
 # Start frontend (in another terminal)
@@ -43,5 +53,17 @@ npm run dev
 DB_PASSWORD     → your PostgreSQL password
 GROQ_API_KEY    → free at https://console.groq.com
 LLM_PROVIDER    → groq   (default, free)
+
+
+── Redis persistence — do this on every fresh install ──
+Redis defaults to no AOF and loose RDB snapshot intervals (as rare as one
+save/hour). session_service.py and interaction_routes.py mirror state to
+Redis specifically so it survives a crash/restart — with default Redis
+settings that mirror is lost on a Redis restart or power loss too, not just
+an app restart. Always start Redis with the repo's redis.conf (see OPTION 3
+above); if you're running Redis as a system service (systemd, Docker, a Pi
+image, etc.) instead of by hand, make sure that service's config includes
+`appendonly yes` / `appendfsync everysec` from redis.conf rather than
+whatever that service's own defaults are.
 
 ═══════════════════════════════════════════

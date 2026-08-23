@@ -149,13 +149,19 @@ def process_interaction_payload(userid: int, frame_bytes: bytes, audio_bytes: by
     if frame is None:
         return {"error": "Invalid image payload."}
 
-    detected, bbox = fs.detect_person(frame)
+    # Was fs.detect_person() (a YOLO PERSON box, not a face box) fed directly
+    # into crop_face() — no face-specific localization at all, an even
+    # coarser version of the wrong-face-crop bug fixed in detect_face()
+    # (see TECH_DEBT.md). Reuses that same fixed function rather than
+    # reimplementing the fastmtcnn/confidence-selection/align=True/
+    # empty-frame-gating logic separately.
+    detected, bbox = fs.detect_face(frame)
     if not detected:
-        return {"error": "No person detected in the provided frame."}
+        return {"error": "No face detected in the provided frame."}
 
     face_image = fs.crop_face(frame, bbox)
     if face_image is None:
-        return {"error": "Person detected, but face not visible / crop failed."}
+        return {"error": "Face detected, but crop failed."}
 
     embedding = fs.generate_embedding(face_image)
     if embedding is None:
