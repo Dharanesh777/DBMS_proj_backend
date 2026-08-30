@@ -25,9 +25,14 @@ yolov8n.pt
 *.wav
 uploads/
 
+# Model Binaries
+models/*.bin
+models/**/*.bin
+
 # Secrets
 token.json
 credentials.json
 app/services/reminder_app/token.json
 app/services/reminder_app/credentials.json
 .env
+
