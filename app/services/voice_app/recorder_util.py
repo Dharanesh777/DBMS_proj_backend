@@ -139,7 +139,11 @@ def process_recording_in_background(interaction_id: int, filepath: str):
                 print(f"✅ Transcribed: {text}")
 
                 try:
-                    from app.services.conversation_summarizer import analyze_conversation
+                    try:
+                        from app.services.voice_app.conversation_summarizer import analyze_conversation
+                    except ImportError:
+                        from app.services.conversation_summarizer import analyze_conversation
+
                     import json
                     analysis = analyze_conversation(text)
                     print("\n💡 COMBINED JSON RESULT:")
@@ -150,7 +154,11 @@ def process_recording_in_background(interaction_id: int, filepath: str):
 
                     if interaction_id:
                         try:
-                            from app.database.db import update_conversation_results
+                            try:
+                                from app.services.voice_app.db import update_conversation_results
+                            except ImportError:
+                                from app.database.db import update_conversation_results
+
                             update_conversation_results(interaction_id, text, summary, emotion)
                             print(f"✅ Database updated for Interaction {interaction_id}")
                         except Exception as db_err:

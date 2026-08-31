@@ -1,6 +1,13 @@
 import os
 import sys
 import time
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+from app.metrics.profiler import PerformanceProfiler, get_process_memory_mb
 from app.services.voice_app.transcription_service import (
     transcribe_audio,
     set_model,
@@ -53,7 +60,9 @@ def main():
 
     selected_model = model_arg or "tiny.en-q5_1"
 
-    # Set up selected model using EXISTING set_model implementation
+    # Monitor model loading memory
+    initial_ram = get_process_memory_mb()
+
     try:
         set_model(selected_model)
         active_info = get_active_model_info()
@@ -101,17 +110,9 @@ def main():
                     pass
             sys.exit(1)
 
-        print(f"Transcribing using {active_info['display_name']}...", flush=True)
-        start_time = time.time()
-        transcript = transcribe_audio(temp_recording_path, model_key=selected_model, auto_cleanup=True)
-        elapsed_time = time.time() - start_time
+        audio_path = temp_recording_path
 
-        print("\nTranscript:", flush=True)
-        print(transcript if transcript else "(No speech detected)", flush=True)
-        print(f"\n[Execution Time: {elapsed_time:.2f}s | Active Model: {active_info['display_name']}]", flush=True)
-        return
-
-    # --- WAV FILE TRANSCRIBE MODE ---
+    # --- TRANSCRIBE & PROFILE ---
     if not audio_path or not os.path.exists(audio_path):
         print("\nNo input audio file specified or file does not exist.", flush=True)
         print("Usage:")
@@ -120,16 +121,18 @@ def main():
         print("  python test_rpi_transcribe.py --test-switch")
         return
 
-    print(f"\n[Transcribing] Audio file: {audio_path}", flush=True)
-    start_time = time.time()
-    transcription = transcribe_audio(audio_path, model_key=selected_model)
-    elapsed_time = time.time() - start_time
+    print(f"\n[Transcribing & Profiling] Audio file: {audio_path}", flush=True)
+
+    with PerformanceProfiler(name=f"Whisper ({active_info['display_name']})", audio_path=audio_path) as profiler:
+        transcription = transcribe_audio(
+            audio_path, model_key=selected_model, auto_cleanup=is_record_mode
+        )
 
     print("\n---------------- RESULTS ----------------", flush=True)
-    print(f"Active Model     : {get_active_model_info()['display_name']}", flush=True)
+    print(f"Active Model     : {active_info['display_name']}", flush=True)
     print(f"Transcribed Text : {transcription if transcription else '(No speech detected)'}", flush=True)
-    print(f"Execution Time   : {elapsed_time:.2f} seconds", flush=True)
-    print("-----------------------------------------", flush=True)
+    
+    profiler.print_summary()
 
 
 if __name__ == "__main__":
