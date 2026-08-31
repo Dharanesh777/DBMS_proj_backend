@@ -1,6 +1,7 @@
 # --- Raspberry Pi Minimal Requirements (Module 1: Audio Transcription) ---
-faster_whisper==1.2.1
+pywhispercpp==1.5.1
 sounddevice==0.5.5
 soundfile==0.14.0
-numpy==1.26.3
+numpy>=1.26.3
 python-dotenv==1.2.2
+

@@ -1,22 +1,42 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Voice Transcription Test</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Transcription Test (whisper.cpp)</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; max-width: 500px; margin: 50px auto; text-align: center; background: #f0f2f5; }
+        body { font-family: 'Segoe UI', Roboto, sans-serif; max-width: 500px; margin: 40px auto; text-align: center; background: #f0f2f5; color: #333; }
         .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); }
-        h2 { color: #1a73e8; }
-        button { padding: 15px 25px; font-size: 18px; border: none; border-radius: 50px; cursor: pointer; transition: 0.3s; margin: 10px; font-weight: bold; }
+        h2 { color: #1a73e8; margin-bottom: 5px; }
+        .model-card { background: #e8f0fe; border-radius: 10px; padding: 15px; margin: 20px 0; border: 1px solid #d2e3fc; }
+        .model-selector { margin-bottom: 10px; }
+        label { font-weight: bold; margin-right: 8px; font-size: 15px; color: #202124; }
+        select { padding: 8px 12px; font-size: 15px; border-radius: 8px; border: 1px solid #dadce0; outline: none; background: white; cursor: pointer; }
+        .active-badge { margin-top: 8px; font-size: 14px; font-weight: 600; color: #1a73e8; }
+        button { padding: 14px 24px; font-size: 16px; border: none; border-radius: 50px; cursor: pointer; transition: 0.2s; margin: 10px; font-weight: bold; }
         .start-btn { background: #34a853; color: white; }
+        .start-btn:hover { background: #2d9247; }
         .stop-btn { background: #ea4335; color: white; display: none; }
-        #result { margin-top: 20px; padding: 20px; background: #fafafa; border: 1px dashed #ccc; border-radius: 10px; min-height: 50px; font-style: italic; }
-        #status { font-weight: bold; color: #555; height: 20px; }
+        .stop-btn:hover { background: #d3382b; }
+        #result { margin-top: 20px; padding: 20px; background: #fafafa; border: 1px dashed #ccc; border-radius: 10px; min-height: 50px; font-style: italic; text-align: left; word-break: break-word; }
+        #status { font-weight: bold; color: #555; height: 24px; margin-top: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>🎙️ Transcription Test</h2>
-        <p>Record your voice to test the API.</p>
+        <p>Record your voice to test whisper.cpp STT.</p>
+
+        <div class="model-card">
+            <div class="model-selector">
+                <label for="modelSelect">Whisper Model:</label>
+                <select id="modelSelect" onchange="updateActiveModelDisplay()">
+                    <option value="tiny.en-q5_1" selected>Tiny</option>
+                    <option value="base.en-q5_1">Base</option>
+                </select>
+            </div>
+            <div id="activeModelDisplay" class="active-badge">Active model: Tiny.en Q5_1</div>
+        </div>
         
         <div id="status"></div>
         <button id="startBtn" class="start-btn">🎤 Start Recording</button>
@@ -29,43 +49,70 @@
         let mediaRecorder;
         let audioChunks = [];
 
+        const modelNames = {
+            "tiny.en-q5_1": "Tiny.en Q5_1",
+            "base.en-q5_1": "Base.en Q5_1"
+        };
+
+        function updateActiveModelDisplay() {
+            const val = document.getElementById('modelSelect').value;
+            const display = modelNames[val] || val;
+            document.getElementById('activeModelDisplay').innerText = `Active model: ${display}`;
+        }
+
         document.getElementById('startBtn').onclick = async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
 
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            mediaRecorder.onstop = async () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                sendToTranscribe(audioBlob);
-            };
+                mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    sendToTranscribe(audioBlob);
+                };
 
-            mediaRecorder.start();
-            document.getElementById('startBtn').style.display = 'none';
-            document.getElementById('stopBtn').style.display = 'inline-block';
-            document.getElementById('status').innerText = "Recording...";
+                mediaRecorder.start();
+                document.getElementById('startBtn').style.display = 'none';
+                document.getElementById('stopBtn').style.display = 'inline-block';
+                document.getElementById('status').innerText = "Recording...";
+            } catch (err) {
+                document.getElementById('status').innerText = "Microphone access denied or error: " + err.message;
+            }
         };
 
         document.getElementById('stopBtn').onclick = () => {
-            mediaRecorder.stop();
-            document.getElementById('startBtn').style.display = 'inline-block';
-            document.getElementById('stopBtn').style.display = 'none';
-            document.getElementById('status').innerText = "Processing...";
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+                document.getElementById('startBtn').style.display = 'inline-block';
+                document.getElementById('stopBtn').style.display = 'none';
+                document.getElementById('status').innerText = "Processing...";
+            }
         };
 
         async function sendToTranscribe(blob) {
             const formData = new FormData();
             formData.append('file', blob, 'test.wav');
+            const selectedModel = document.getElementById('modelSelect').value;
+            formData.append('model', selectedModel);
 
             try {
-                const res = await fetch('/transcribe', { method: 'POST', body: formData });
+                const res = await fetch(`/transcribe?model=${encodeURIComponent(selectedModel)}`, { 
+                    method: 'POST', 
+                    body: formData 
+                });
                 const data = await res.json();
-                document.getElementById('result').innerText = data.text || "Error: " + data.message;
+                document.getElementById('result').innerText = data.text || "Error: " + (data.message || data.error);
+                if (data.active_model) {
+                    document.getElementById('activeModelDisplay').innerText = `Active model: ${data.active_model}`;
+                }
                 document.getElementById('status').innerText = "Done!";
             } catch (err) {
                 document.getElementById('status').innerText = "Communication failed.";
             }
         }
+
+        updateActiveModelDisplay();
     </script>
 </body>
 </html>
